@@ -101,6 +101,13 @@ export class GPURenderer {
 	private canvas: HTMLCanvasElement | null = null;
 	private _ready = false;
 
+	// MSAA
+	private readonly sampleCount = 4;
+	private msaaTexture: GPUTexture | null = null;
+	private msaaView: GPUTextureView | null = null;
+	private msaaWidth = 0;
+	private msaaHeight = 0;
+
 	get ready(): boolean {
 		return this._ready;
 	}
@@ -164,6 +171,7 @@ export class GPURenderer {
 				],
 			},
 			primitive: { topology: "triangle-list" },
+			multisample: { count: this.sampleCount },
 		});
 
 		this._ready = true;
@@ -259,16 +267,22 @@ export class GPURenderer {
 			}
 		}
 
+		// Ensure the MSAA texture matches the current canvas size
+		this.ensureMsaaTexture(w, h);
+
+		const resolveTarget = this.context.getCurrentTexture().createView();
+
 		if (verts.length === 0) {
 			// Just clear
 			const encoder = this.device.createCommandEncoder();
 			const pass = encoder.beginRenderPass({
 				colorAttachments: [
 					{
-						view: this.context.getCurrentTexture().createView(),
+						view: this.msaaView!,
+						resolveTarget,
 						clearValue: { r: bgColor[0], g: bgColor[1], b: bgColor[2], a: bgColor[3] },
 						loadOp: "clear",
-						storeOp: "store",
+						storeOp: "discard",
 					},
 				],
 			});
@@ -288,10 +302,11 @@ export class GPURenderer {
 		const pass = encoder.beginRenderPass({
 			colorAttachments: [
 				{
-					view: this.context.getCurrentTexture().createView(),
+					view: this.msaaView!,
+					resolveTarget,
 					clearValue: { r: bgColor[0], g: bgColor[1], b: bgColor[2], a: bgColor[3] },
 					loadOp: "clear",
-					storeOp: "store",
+					storeOp: "discard",
 				},
 			],
 		});
@@ -304,7 +319,29 @@ export class GPURenderer {
 		vertexBuffer.destroy();
 	}
 
+	/**
+	 * Create or recreate the MSAA render-target texture when the canvas size changes.
+	 */
+	private ensureMsaaTexture(width: number, height: number): void {
+		if (!this.device) return;
+		if (this.msaaTexture && this.msaaWidth === width && this.msaaHeight === height) return;
+
+		this.msaaTexture?.destroy();
+		this.msaaTexture = this.device.createTexture({
+			size: { width, height },
+			format: this.format,
+			sampleCount: this.sampleCount,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		this.msaaView = this.msaaTexture.createView();
+		this.msaaWidth = width;
+		this.msaaHeight = height;
+	}
+
 	destroy(): void {
+		this.msaaTexture?.destroy();
+		this.msaaTexture = null;
+		this.msaaView = null;
 		this.device?.destroy();
 		this.device = null;
 		this.context = null;
