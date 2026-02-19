@@ -1,4 +1,10 @@
-import type { AxisConfig, ChartLayout, LegendConfig, LegendPosition } from "./types.ts";
+import type {
+	AxisConfig,
+	ChartLayout,
+	LegendConfig,
+	LegendHitRect,
+	LegendPosition,
+} from "./types.ts";
 import { formatTick } from "./utils.ts";
 
 const DEFAULT_FONT = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -196,8 +202,10 @@ export function drawLegend(
 	layout: ChartLayout,
 	items: { label: string; color: string }[],
 	config?: LegendConfig,
-): void {
-	if (config?.visible === false) return;
+	hiddenSeries?: ReadonlySet<number>,
+): LegendHitRect[] {
+	const hitRects: LegendHitRect[] = [];
+	if (config?.visible === false) return hitRects;
 
 	const position: LegendPosition = config?.position ?? "bottom";
 	const textColor = config?.textColor ?? DEFAULT_LEGEND_COLOR;
@@ -235,17 +243,54 @@ export function drawLegend(
 	let x = startX;
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i]!;
+		const hidden = hiddenSeries?.has(i) ?? false;
+		const itemW = itemWidths[i]!;
+
+		// Record hit rect for click detection
+		hitRects.push({
+			x,
+			y: startY - 2,
+			w: itemW - itemPadding / 2,
+			h: Math.max(swatchSize, fontSize) + 4,
+			seriesIdx: i,
+		});
 
 		// Swatch
+		ctx.globalAlpha = hidden ? 0.3 : 1.0;
 		ctx.fillStyle = item.color;
 		ctx.fillRect(x, startY, swatchSize, swatchSize);
 
+		if (hidden) {
+			// Draw diagonal line through swatch to indicate hidden
+			ctx.strokeStyle = "#ffffff";
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(x, startY);
+			ctx.lineTo(x + swatchSize, startY + swatchSize);
+			ctx.stroke();
+		}
+
 		// Label
-		ctx.fillStyle = textColor;
+		ctx.fillStyle = hidden ? "#aaaaaa" : textColor;
 		ctx.textAlign = "left";
 		ctx.textBaseline = "top";
 		ctx.fillText(item.label, x + swatchSize + swatchGap, startY);
 
-		x += itemWidths[i]!;
+		// Strikethrough for hidden labels
+		if (hidden) {
+			const textW = ctx.measureText(item.label).width;
+			const lineY = startY + fontSize / 2;
+			ctx.strokeStyle = "#aaaaaa";
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(x + swatchSize + swatchGap, lineY);
+			ctx.lineTo(x + swatchSize + swatchGap + textW, lineY);
+			ctx.stroke();
+		}
+
+		ctx.globalAlpha = 1.0;
+		x += itemW;
 	}
+
+	return hitRects;
 }

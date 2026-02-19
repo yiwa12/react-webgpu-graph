@@ -186,6 +186,17 @@ export const DEFAULT_COLORS: readonly string[] = [
 ];
 
 // ============================================================
+// Legend hit-test rectangle (for click toggling)
+// ============================================================
+export interface LegendHitRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	seriesIdx: number;
+}
+
+// ============================================================
 // Internal chart area layout
 // ============================================================
 export interface ChartLayout {

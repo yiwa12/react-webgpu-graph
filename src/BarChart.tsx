@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { drawAxes, drawAxesHorizontal, drawLegend } from "./canvas-overlay.ts";
 import type { Rect } from "./gpu-renderer.ts";
 import { TooltipOverlay } from "./Tooltip.tsx";
-import type { BarChartProps, ChartLayout, TooltipInfo } from "./types.ts";
+import type { BarChartProps, ChartLayout, LegendHitRect, TooltipInfo } from "./types.ts";
 import { DEFAULT_COLORS } from "./types.ts";
 import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
@@ -26,6 +26,8 @@ export function BarChart({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [tooltipInfo, setTooltipInfo] = useState<TooltipInfo | null>(null);
 	const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
+	const [hiddenSeries, setHiddenSeries] = useState<Set<number>>(new Set());
+	const legendHitRectsRef = useRef<LegendHitRect[]>([]);
 
 	// Assign colors
 	const colors = useMemo(
@@ -87,15 +89,16 @@ export function BarChart({
 			);
 
 			if (legend?.visible !== false) {
-				drawLegend(
+				legendHitRectsRef.current = drawLegend(
 					ctx,
 					lay,
 					datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
 					legend,
+					hiddenSeries,
 				);
 			}
 		},
-		[width, height, xAxis, yAxis, legend, datasets, colors],
+		[width, height, xAxis, yAxis, legend, datasets, colors, hiddenSeries],
 	);
 
 	const drawOverlayHorizontal = useCallback(
@@ -121,15 +124,16 @@ export function BarChart({
 			);
 
 			if (legend?.visible !== false) {
-				drawLegend(
+				legendHitRectsRef.current = drawLegend(
 					ctx,
 					lay,
 					datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
 					legend,
+					hiddenSeries,
 				);
 			}
 		},
-		[width, height, xAxis, yAxis, legend, datasets, colors],
+		[width, height, xAxis, yAxis, legend, datasets, colors, hiddenSeries],
 	);
 
 	// Draw
@@ -145,15 +149,22 @@ export function BarChart({
 		if (orientation === "vertical") {
 			const { min, max, ticks } = computeTicks(dataMin, dataMax, yAxis);
 			const groupWidth = plotWidth / labels.length;
-			const barWidth = (groupWidth * 0.7) / datasets.length;
+			const visibleCount = datasets.length - hiddenSeries.size;
+			const barWidth = visibleCount > 0 ? (groupWidth * 0.7) / visibleCount : 0;
 			const groupPad = groupWidth * 0.15;
 
 			for (let di = 0; di < datasets.length; di++) {
+				if (hiddenSeries.has(di)) continue;
 				const ds = datasets[di]!;
 				const color = colors[di]!;
+				// Compute visible index for positioning
+				let visibleIdx = 0;
+				for (let k = 0; k < di; k++) {
+					if (!hiddenSeries.has(k)) visibleIdx++;
+				}
 				for (let ci = 0; ci < labels.length; ci++) {
 					const val = ds.data[ci] ?? 0;
-					const x = plotX + ci * groupWidth + groupPad + di * barWidth;
+					const x = plotX + ci * groupWidth + groupPad + visibleIdx * barWidth;
 					const yBottom = mapValue(0, min, max, plotY + plotHeight, -plotHeight);
 					const yTop = mapValue(val, min, max, plotY + plotHeight, -plotHeight);
 					const rectY = Math.min(yBottom, yTop);
@@ -179,15 +190,21 @@ export function BarChart({
 			// Horizontal
 			const { min, max, ticks } = computeTicks(dataMin, dataMax, xAxis);
 			const groupHeight = plotHeight / labels.length;
-			const barHeight = (groupHeight * 0.7) / datasets.length;
+			const visibleCount = datasets.length - hiddenSeries.size;
+			const barHeight = visibleCount > 0 ? (groupHeight * 0.7) / visibleCount : 0;
 			const groupPad = groupHeight * 0.15;
 
 			for (let di = 0; di < datasets.length; di++) {
+				if (hiddenSeries.has(di)) continue;
 				const ds = datasets[di]!;
 				const color = colors[di]!;
+				let visibleIdx = 0;
+				for (let k = 0; k < di; k++) {
+					if (!hiddenSeries.has(k)) visibleIdx++;
+				}
 				for (let ci = 0; ci < labels.length; ci++) {
 					const val = ds.data[ci] ?? 0;
-					const y = plotY + ci * groupHeight + groupPad + di * barHeight;
+					const y = plotY + ci * groupHeight + groupPad + visibleIdx * barHeight;
 					const xLeft = mapValue(0, min, max, plotX, plotWidth);
 					const xRight = mapValue(val, min, max, plotX, plotWidth);
 					const rectX = Math.min(xLeft, xRight);
@@ -221,8 +238,9 @@ export function BarChart({
 		dataMin,
 		dataMax,
 		getRenderer,
-		drawOverlayHorizontal, // Overlay
+		drawOverlayHorizontal,
 		drawOverlayVertical,
+		hiddenSeries,
 	]);
 
 	// Mouse hover
@@ -233,6 +251,14 @@ export function BarChart({
 			setContainerRect(rect);
 			const mx = e.clientX - rect.left;
 			const my = e.clientY - rect.top;
+
+			// Check legend hover for cursor
+			const overLegend = legendHitRectsRef.current.some(
+				(lr) => mx >= lr.x && mx <= lr.x + lr.w && my >= lr.y && my <= lr.y + lr.h,
+			);
+			if (containerRef.current) {
+				containerRef.current.style.cursor = overLegend ? "pointer" : "default";
+			}
 
 			for (const hr of hitRectsRef.current) {
 				if (
@@ -258,7 +284,34 @@ export function BarChart({
 		[datasets, labels, colors],
 	);
 
-	const handleMouseLeave = useCallback(() => setTooltipInfo(null), []);
+	const handleMouseLeave = useCallback(() => {
+		setTooltipInfo(null);
+		if (containerRef.current) {
+			containerRef.current.style.cursor = "default";
+		}
+	}, []);
+
+	const handleClick = useCallback((e: React.MouseEvent) => {
+		const rect = containerRef.current?.getBoundingClientRect();
+		if (!rect) return;
+		const mx = e.clientX - rect.left;
+		const my = e.clientY - rect.top;
+
+		for (const lr of legendHitRectsRef.current) {
+			if (mx >= lr.x && mx <= lr.x + lr.w && my >= lr.y && my <= lr.y + lr.h) {
+				setHiddenSeries((prev) => {
+					const next = new Set(prev);
+					if (next.has(lr.seriesIdx)) {
+						next.delete(lr.seriesIdx);
+					} else {
+						next.add(lr.seriesIdx);
+					}
+					return next;
+				});
+				return;
+			}
+		}
+	}, []);
 
 	if (fallback) {
 		return (
@@ -283,6 +336,7 @@ export function BarChart({
 			style={{ position: "relative", width, height }}
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
+			onClick={handleClick}
 		>
 			<canvas
 				ref={canvasRef}

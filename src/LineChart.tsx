@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { drawAxes, drawLegend } from "./canvas-overlay.ts";
 import type { Circle, Line as GpuLine } from "./gpu-renderer.ts";
 import { TooltipOverlay } from "./Tooltip.tsx";
-import type { ChartLayout, LineChartProps, TooltipInfo } from "./types.ts";
+import type { ChartLayout, LegendHitRect, LineChartProps, TooltipInfo } from "./types.ts";
 import { DEFAULT_COLORS } from "./types.ts";
 import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
@@ -25,6 +25,8 @@ export function LineChart({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [tooltipInfo, setTooltipInfo] = useState<TooltipInfo | null>(null);
 	const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
+	const [hiddenSeries, setHiddenSeries] = useState<Set<number>>(new Set());
+	const legendHitRectsRef = useRef<LegendHitRect[]>([]);
 
 	const colors = useMemo(
 		() =>
@@ -71,6 +73,7 @@ export function LineChart({
 		const { min, max, ticks } = computeTicks(dataMin, dataMax, yAxis);
 
 		for (let di = 0; di < datasets.length; di++) {
+			if (hiddenSeries.has(di)) continue;
 			const ds = datasets[di]!;
 			const color = colors[di]!;
 			const lineWidth = ds.lineWidth ?? 2;
@@ -139,11 +142,12 @@ export function LineChart({
 					yAxis,
 				);
 				if (legend?.visible !== false) {
-					drawLegend(
+					legendHitRectsRef.current = drawLegend(
 						ctx,
 						layout,
 						datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
 						legend,
+						hiddenSeries,
 					);
 				}
 			}
@@ -163,6 +167,7 @@ export function LineChart({
 		getRenderer,
 		width,
 		height,
+		hiddenSeries,
 	]);
 
 	const handleMouseMove = useCallback(
@@ -172,6 +177,14 @@ export function LineChart({
 			setContainerRect(rect);
 			const mx = e.clientX - rect.left;
 			const my = e.clientY - rect.top;
+
+			// Check legend hover for cursor
+			const overLegend = legendHitRectsRef.current.some(
+				(lr) => mx >= lr.x && mx <= lr.x + lr.w && my >= lr.y && my <= lr.y + lr.h,
+			);
+			if (containerRef.current) {
+				containerRef.current.style.cursor = overLegend ? "pointer" : "default";
+			}
 
 			let closest: (typeof hitPointsRef.current)[number] | null = null;
 			let closestDist = Number.POSITIVE_INFINITY;
@@ -201,7 +214,34 @@ export function LineChart({
 		[datasets, labels, colors],
 	);
 
-	const handleMouseLeave = useCallback(() => setTooltipInfo(null), []);
+	const handleMouseLeave = useCallback(() => {
+		setTooltipInfo(null);
+		if (containerRef.current) {
+			containerRef.current.style.cursor = "default";
+		}
+	}, []);
+
+	const handleClick = useCallback((e: React.MouseEvent) => {
+		const rect = containerRef.current?.getBoundingClientRect();
+		if (!rect) return;
+		const mx = e.clientX - rect.left;
+		const my = e.clientY - rect.top;
+
+		for (const lr of legendHitRectsRef.current) {
+			if (mx >= lr.x && mx <= lr.x + lr.w && my >= lr.y && my <= lr.y + lr.h) {
+				setHiddenSeries((prev) => {
+					const next = new Set(prev);
+					if (next.has(lr.seriesIdx)) {
+						next.delete(lr.seriesIdx);
+					} else {
+						next.add(lr.seriesIdx);
+					}
+					return next;
+				});
+				return;
+			}
+		}
+	}, []);
 
 	if (fallback) {
 		return (
@@ -226,6 +266,7 @@ export function LineChart({
 			style={{ position: "relative", width, height }}
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
+			onClick={handleClick}
 		>
 			<canvas
 				ref={canvasRef}

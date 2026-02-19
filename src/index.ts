@@ -11,6 +11,7 @@ export type {
 	BaseChartProps,
 	Color,
 	LegendConfig,
+	LegendHitRect,
 	LegendPosition,
 	LineChartProps,
 	LineDataset,
