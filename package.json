@@ -4,7 +4,7 @@
 	"type": "module",
 	"main": "src/index.ts",
 	"scripts": {
-		"dev": "bun run sample/server.ts",
+		"dev": "bun --hot run sample/server.ts",
 		"build": "bun build src/index.ts --outdir dist --target browser",
 		"check": "biome check --write .",
 		"format": "biome format --write .",
