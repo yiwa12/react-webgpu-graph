@@ -5,11 +5,18 @@ import type {
 	LegendHitRect,
 	LegendPosition,
 	SharedAxes,
+	TimelineAxisConfig,
+	TimelineColumnWidths,
+	TimelineLabelConfig,
+	TimelineUnit,
 } from "../types.ts";
 import { formatTick } from "../utils.ts";
 
-const DEFAULT_FONT = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-const TITLE_FONT = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+const FONT_FAMILY =
+	'"Noto Sans JP", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Helvetica Neue", "Segoe UI", "Yu Gothic UI", "Yu Gothic", sans-serif';
+
+const DEFAULT_FONT = `12px ${FONT_FAMILY}`;
+const TITLE_FONT = `13px ${FONT_FAMILY}`;
 
 const DEFAULT_AXIS_COLOR = "#666666";
 const DEFAULT_LABEL_COLOR = "#333333";
@@ -398,4 +405,483 @@ export function drawLegend(
 	}
 
 	return hitRects;
+}
+
+// ============================================================
+// Draw timeline chart axes (X-axis on top, Y-axis as table)
+// ============================================================
+
+const WEEKDAY_JP = ["日", "月", "火", "水", "木", "金", "土"] as const;
+const HEADER_HEIGHT = 24;
+
+/**
+ * Apply a simple time format string to a Date.
+ * Supports: YYYY, MM, DD, HH, mm, ss
+ */
+function applyTimeFormat(d: Date, fmt: string): string {
+	return fmt
+		.replace("YYYY", String(d.getFullYear()))
+		.replace("MM", String(d.getMonth() + 1).padStart(2, "0"))
+		.replace("DD", String(d.getDate()).padStart(2, "0"))
+		.replace("HH", String(d.getHours()).padStart(2, "0"))
+		.replace("mm", String(d.getMinutes()).padStart(2, "0"))
+		.replace("ss", String(d.getSeconds()).padStart(2, "0"));
+}
+
+/**
+ * Compute nice time ticks for the "time" unit.
+ */
+function computeTimeTicks(minT: number, maxT: number, maxTicks: number): number[] {
+	const range = maxT - minT;
+	const candidates = [
+		1000, 5000, 10000, 15000, 30000, 60000, 300000, 600000, 900000, 1800000, 3600000, 7200000,
+		10800000, 14400000, 21600000, 43200000, 86400000,
+	];
+	let interval = candidates[candidates.length - 1]!;
+	for (const c of candidates) {
+		if (range / c <= maxTicks) {
+			interval = c;
+			break;
+		}
+	}
+	const ticks: number[] = [];
+	const start = Math.ceil(minT / interval) * interval;
+	for (let t = start; t <= maxT; t += interval) {
+		ticks.push(t);
+	}
+	return ticks;
+}
+
+/** Resolve effective column widths array from config */
+export function resolveColumnWidths(
+	labelConfig?: TimelineLabelConfig,
+	columnWidths?: TimelineColumnWidths,
+): { name: string; width: number }[] {
+	const cols: { name: string; width: number }[] = [
+		{ name: "タスク名", width: columnWidths?.label ?? 100 },
+	];
+	if (labelConfig?.showStart) {
+		cols.push({ name: "開始", width: columnWidths?.start ?? 70 });
+	}
+	if (labelConfig?.showEnd) {
+		cols.push({ name: "終了", width: columnWidths?.end ?? 70 });
+	}
+	if (labelConfig?.showProgress) {
+		cols.push({ name: "進捗", width: columnWidths?.progress ?? 50 });
+	}
+	return cols;
+}
+
+/** Total table width from columns */
+export function totalTableWidth(columns: { width: number }[]): number {
+	let w = 0;
+	for (const c of columns) w += c.width;
+	return w;
+}
+
+/**
+ * Draw timeline axes.
+ *
+ * X-axis labels are drawn at the TOP of the plot area.
+ * Y-axis is drawn as a table with column headers.
+ */
+export function drawTimelineAxes(
+	ctx: CanvasRenderingContext2D,
+	layout: ChartLayout,
+	minTime: number,
+	maxTime: number,
+	unit: TimelineUnit,
+	itemLabels: string[],
+	xAxis?: TimelineAxisConfig,
+	timeFormat?: string,
+	labelConfig?: TimelineLabelConfig,
+	items?: { start: Date; end: Date; progress?: number }[],
+	columns?: { name: string; width: number }[],
+	xHeaderHeight?: number,
+): void {
+	const { plotX, plotY, plotWidth, plotHeight } = layout;
+	const axisColor = xAxis?.lineColor ?? DEFAULT_AXIS_COLOR;
+	const labelColor = xAxis?.labelColor ?? DEFAULT_LABEL_COLOR;
+	const headerH = xHeaderHeight ?? 0;
+	const cols = columns ?? resolveColumnWidths(labelConfig);
+	const tableW = totalTableWidth(cols);
+
+	// ---- Y-axis table header ----
+	const headerY = plotY;
+	ctx.fillStyle = "#f5f5f5";
+	ctx.fillRect(0, headerY, plotX, HEADER_HEIGHT);
+	ctx.strokeStyle = axisColor;
+	ctx.lineWidth = 1;
+	ctx.strokeRect(0, headerY, plotX, HEADER_HEIGHT);
+
+	// Column header texts & vertical separators
+	let colX = plotX - tableW;
+	ctx.font = TITLE_FONT;
+	ctx.fillStyle = DEFAULT_TITLE_COLOR;
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+	for (const col of cols) {
+		ctx.fillText(col.name, colX + col.width / 2, headerY + HEADER_HEIGHT / 2, col.width - 4);
+		colX += col.width;
+		// Vertical separator
+		ctx.strokeStyle = axisColor;
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(colX, headerY);
+		ctx.lineTo(colX, headerY + HEADER_HEIGHT);
+		ctx.stroke();
+	}
+
+	// ---- Y-axis table body ----
+	const dataTop = plotY + HEADER_HEIGHT;
+	const dataHeight = plotHeight - HEADER_HEIGHT;
+	const rowHeight = itemLabels.length > 0 ? dataHeight / itemLabels.length : dataHeight;
+	const fmt = labelConfig?.timeFormat ?? timeFormat ?? "MM/DD";
+
+	for (let i = 0; i < itemLabels.length; i++) {
+		const cy = dataTop + (i + 0.5) * rowHeight;
+		const rowTop = dataTop + i * rowHeight;
+
+		// Alternating row background
+		if (i % 2 === 1) {
+			ctx.fillStyle = "rgba(0,0,0,0.03)";
+			ctx.fillRect(0, rowTop, plotX, rowHeight);
+		}
+
+		// Row data
+		colX = plotX - tableW;
+		let colIdx = 0;
+		for (const col of cols) {
+			ctx.font = DEFAULT_FONT;
+			ctx.fillStyle = labelColor;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+
+			let text = "";
+			if (colIdx === 0) {
+				text = itemLabels[i]!;
+			} else if (col.name === "開始" && items?.[i]) {
+				text = applyTimeFormat(items[i]!.start, fmt);
+			} else if (col.name === "終了" && items?.[i]) {
+				text = applyTimeFormat(items[i]!.end, fmt);
+			} else if (col.name === "進捗" && items?.[i] && items[i]!.progress != null) {
+				text = `${Math.round(items[i]!.progress! * 100)}%`;
+			}
+
+			ctx.fillText(text, colX + col.width / 2, cy, col.width - 6);
+			colX += col.width;
+			colIdx++;
+		}
+
+		// Row separator (horizontal line)
+		ctx.strokeStyle = "#e0e0e0";
+		ctx.lineWidth = 0.5;
+		ctx.beginPath();
+		ctx.moveTo(0, rowTop + rowHeight);
+		ctx.lineTo(plotX + plotWidth, rowTop + rowHeight);
+		ctx.stroke();
+
+		// Column vertical separators in body
+		colX = plotX - tableW;
+		for (const col of cols) {
+			colX += col.width;
+			ctx.strokeStyle = "#e0e0e0";
+			ctx.lineWidth = 0.5;
+			ctx.beginPath();
+			ctx.moveTo(colX, rowTop);
+			ctx.lineTo(colX, rowTop + rowHeight);
+			ctx.stroke();
+		}
+	}
+
+	// ---- Axis lines ----
+	ctx.strokeStyle = axisColor;
+	ctx.lineWidth = 1;
+
+	// Top X axis line (at bottom of header area)
+	ctx.beginPath();
+	ctx.moveTo(plotX, dataTop);
+	ctx.lineTo(plotX + plotWidth, dataTop);
+	ctx.stroke();
+
+	// Bottom border line
+	ctx.beginPath();
+	ctx.moveTo(plotX, dataTop + dataHeight);
+	ctx.lineTo(plotX + plotWidth, dataTop + dataHeight);
+	ctx.stroke();
+
+	// Left Y axis line
+	ctx.beginPath();
+	ctx.moveTo(plotX, plotY);
+	ctx.lineTo(plotX, dataTop + dataHeight);
+	ctx.stroke();
+
+	// Right border
+	ctx.beginPath();
+	ctx.moveTo(plotX + plotWidth, plotY);
+	ctx.lineTo(plotX + plotWidth, dataTop + dataHeight);
+	ctx.stroke();
+
+	// ---- X-axis ticks at top ----
+	const timeToX = (t: number) => plotX + ((t - minTime) / (maxTime - minTime || 1)) * plotWidth;
+
+	if (unit === "time") {
+		const tickFormat = timeFormat ?? "HH:mm";
+		const maxTicks = Math.max(4, Math.floor(plotWidth / 80));
+		const ticks = computeTimeTicks(minTime, maxTime, maxTicks);
+
+		ctx.font = DEFAULT_FONT;
+		ctx.fillStyle = labelColor;
+		ctx.textAlign = "center";
+		ctx.textBaseline = "bottom";
+		for (const t of ticks) {
+			const x = timeToX(t);
+			const d = new Date(t);
+			ctx.fillText(applyTimeFormat(d, tickFormat), x, plotY - 4);
+			ctx.strokeStyle = "#e0e0e0";
+			ctx.lineWidth = 0.5;
+			ctx.beginPath();
+			ctx.moveTo(x, dataTop);
+			ctx.lineTo(x, dataTop + dataHeight);
+			ctx.stroke();
+		}
+		if (xAxis?.title) {
+			ctx.font = TITLE_FONT;
+			ctx.fillStyle = xAxis.titleColor ?? DEFAULT_TITLE_COLOR;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "bottom";
+			ctx.fillText(xAxis.title, plotX + plotWidth / 2, plotY - 22);
+		}
+	} else if (unit === "day") {
+		// 3-tier at top: row1=YYYY年MM月, row2=DD, row3=曜日
+		const startDate = new Date(minTime);
+		const endDate = new Date(maxTime);
+		startDate.setHours(0, 0, 0, 0);
+
+		const days: Date[] = [];
+		const d = new Date(startDate);
+		while (d.getTime() <= endDate.getTime()) {
+			days.push(new Date(d));
+			d.setDate(d.getDate() + 1);
+		}
+		if (days.length === 0) return;
+
+		const dayWidth = plotWidth / days.length;
+
+		for (let i = 0; i < days.length; i++) {
+			const day = days[i]!;
+			const x = plotX + i * dayWidth;
+			const cx = x + dayWidth / 2;
+			const dow = day.getDay();
+
+			// Vertical grid in data area
+			ctx.strokeStyle = "#e0e0e0";
+			ctx.lineWidth = 0.5;
+			ctx.beginPath();
+			ctx.moveTo(x, dataTop);
+			ctx.lineTo(x, dataTop + dataHeight);
+			ctx.stroke();
+
+			// Row 2 (middle): DD — positioned in the header
+			ctx.font = DEFAULT_FONT;
+			ctx.fillStyle = labelColor;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "bottom";
+			ctx.fillText(String(day.getDate()), cx, plotY - 2);
+
+			// Row 3 (bottom): 曜日 — inside the header row
+			const wdColor = dow === 0 ? "#e15759" : dow === 6 ? "#4e79a7" : labelColor;
+			ctx.fillStyle = wdColor;
+			ctx.textBaseline = "middle";
+			ctx.fillText(WEEKDAY_JP[dow]!, cx, plotY + HEADER_HEIGHT / 2);
+		}
+
+		// Row 1 (top): YYYY年MM月 grouped
+		let prevMonth = -1;
+		let monthStart = 0;
+		for (let i = 0; i <= days.length; i++) {
+			const mon = i < days.length ? days[i]!.getMonth() : -2;
+			const yr = i < days.length ? days[i]!.getFullYear() : -2;
+			const key = yr * 100 + mon;
+			if (key !== prevMonth && prevMonth !== -1) {
+				const x0 = plotX + monthStart * dayWidth;
+				const x1 = plotX + i * dayWidth;
+				const prevDay = days[monthStart]!;
+				const label = `${prevDay.getFullYear()}年${String(prevDay.getMonth() + 1).padStart(2, "0")}月`;
+
+				ctx.font = TITLE_FONT;
+				ctx.fillStyle = DEFAULT_TITLE_COLOR;
+				ctx.textAlign = "center";
+				ctx.textBaseline = "bottom";
+				ctx.fillText(label, (x0 + x1) / 2, plotY - 18);
+
+				if (i < days.length) {
+					ctx.strokeStyle = axisColor;
+					ctx.lineWidth = 1;
+					ctx.beginPath();
+					ctx.moveTo(x1, plotY - headerH);
+					ctx.lineTo(x1, plotY);
+					ctx.stroke();
+				}
+				monthStart = i;
+			}
+			if (prevMonth === -1) prevMonth = key;
+			if (key !== prevMonth) {
+				monthStart = i;
+				prevMonth = key;
+			}
+		}
+	} else if (unit === "week") {
+		// 2-tier at top: row1=YYYY年MM月, row2=W{n}
+		const startDate = new Date(minTime);
+		const endDate = new Date(maxTime);
+		const startDay = new Date(startDate);
+		startDay.setHours(0, 0, 0, 0);
+		const dayOfWeek = startDay.getDay();
+		startDay.setDate(startDay.getDate() - ((dayOfWeek + 6) % 7));
+
+		const weeks: Date[] = [];
+		const w = new Date(startDay);
+		while (w.getTime() <= endDate.getTime()) {
+			weeks.push(new Date(w));
+			w.setDate(w.getDate() + 7);
+		}
+		if (weeks.length === 0) return;
+
+		const totalDays = (endDate.getTime() - startDay.getTime()) / (24 * 3600 * 1000);
+		const pxPerDay = plotWidth / (totalDays || 1);
+
+		for (let i = 0; i < weeks.length; i++) {
+			const weekStart = weeks[i]!;
+			const x =
+				plotX + ((weekStart.getTime() - startDay.getTime()) / (24 * 3600 * 1000)) * pxPerDay;
+			const nextX =
+				i + 1 < weeks.length
+					? plotX + ((weeks[i + 1]!.getTime() - startDay.getTime()) / (24 * 3600 * 1000)) * pxPerDay
+					: plotX + plotWidth;
+
+			ctx.strokeStyle = "#e0e0e0";
+			ctx.lineWidth = 0.5;
+			ctx.beginPath();
+			ctx.moveTo(x, dataTop);
+			ctx.lineTo(x, dataTop + dataHeight);
+			ctx.stroke();
+
+			const wn = getISOWeekNumber(weekStart);
+			ctx.font = DEFAULT_FONT;
+			ctx.fillStyle = labelColor;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+			ctx.fillText(`W${wn}`, (x + nextX) / 2, plotY + HEADER_HEIGHT / 2);
+		}
+
+		// Top row
+		let prevMonth = -1;
+		let monthStartX = plotX;
+		for (let i = 0; i <= weeks.length; i++) {
+			const mon = i < weeks.length ? weeks[i]!.getMonth() : -2;
+			const yr = i < weeks.length ? weeks[i]!.getFullYear() : -2;
+			const key = yr * 100 + mon;
+
+			if (key !== prevMonth && prevMonth !== -1) {
+				const currentX =
+					i < weeks.length
+						? plotX + ((weeks[i]!.getTime() - startDay.getTime()) / (24 * 3600 * 1000)) * pxPerDay
+						: plotX + plotWidth;
+				const prevWeek = weeks[i - 1]!;
+				const label = `${prevWeek.getFullYear()}年${String(prevWeek.getMonth() + 1).padStart(2, "0")}月`;
+
+				ctx.font = TITLE_FONT;
+				ctx.fillStyle = DEFAULT_TITLE_COLOR;
+				ctx.textAlign = "center";
+				ctx.textBaseline = "bottom";
+				ctx.fillText(label, (monthStartX + currentX) / 2, plotY - 4);
+
+				monthStartX = currentX;
+			}
+			if (prevMonth === -1 || key !== prevMonth) {
+				if (prevMonth !== -1) {
+					monthStartX =
+						i < weeks.length
+							? plotX + ((weeks[i]!.getTime() - startDay.getTime()) / (24 * 3600 * 1000)) * pxPerDay
+							: plotX + plotWidth;
+				}
+				prevMonth = key;
+			}
+		}
+	} else if (unit === "month") {
+		// 2-tier at top: row1=YYYY年, row2=MM月
+		const startDate = new Date(minTime);
+		const endDate = new Date(maxTime);
+
+		const months: Date[] = [];
+		const m = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+		while (m.getTime() <= endDate.getTime()) {
+			months.push(new Date(m));
+			m.setMonth(m.getMonth() + 1);
+		}
+		if (months.length === 0) return;
+
+		for (let i = 0; i < months.length; i++) {
+			const mon = months[i]!;
+			const x = timeToX(mon.getTime());
+			const nextX = i + 1 < months.length ? timeToX(months[i + 1]!.getTime()) : plotX + plotWidth;
+
+			ctx.strokeStyle = "#e0e0e0";
+			ctx.lineWidth = 0.5;
+			ctx.beginPath();
+			ctx.moveTo(x, dataTop);
+			ctx.lineTo(x, dataTop + dataHeight);
+			ctx.stroke();
+
+			ctx.font = DEFAULT_FONT;
+			ctx.fillStyle = labelColor;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+			ctx.fillText(
+				`${String(mon.getMonth() + 1).padStart(2, "0")}月`,
+				(x + nextX) / 2,
+				plotY + HEADER_HEIGHT / 2,
+			);
+		}
+
+		// Top row: YYYY年
+		let prevYear = -1;
+		let yearStartX = plotX;
+		for (let i = 0; i <= months.length; i++) {
+			const yr = i < months.length ? months[i]!.getFullYear() : -2;
+			if (yr !== prevYear && prevYear !== -1) {
+				const currentX = i < months.length ? timeToX(months[i]!.getTime()) : plotX + plotWidth;
+				ctx.font = TITLE_FONT;
+				ctx.fillStyle = DEFAULT_TITLE_COLOR;
+				ctx.textAlign = "center";
+				ctx.textBaseline = "bottom";
+				ctx.fillText(`${prevYear}年`, (yearStartX + currentX) / 2, plotY - 4);
+
+				yearStartX = currentX;
+			}
+			if (prevYear === -1 || yr !== prevYear) {
+				if (prevYear !== -1) {
+					yearStartX = i < months.length ? timeToX(months[i]!.getTime()) : plotX + plotWidth;
+				}
+				prevYear = yr;
+			}
+		}
+	}
+
+	// Header line between x-header area and data area
+	ctx.strokeStyle = axisColor;
+	ctx.lineWidth = 1;
+	ctx.beginPath();
+	ctx.moveTo(plotX, plotY + HEADER_HEIGHT);
+	ctx.lineTo(plotX + plotWidth, plotY + HEADER_HEIGHT);
+	ctx.stroke();
+}
+
+/** ISO week number */
+function getISOWeekNumber(d: Date): number {
+	const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+	tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+	const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+	return Math.ceil(((tmp.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
 }

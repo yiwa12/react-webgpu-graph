@@ -5,9 +5,18 @@ import {
 	LineChart,
 	ScatterChart,
 	StackedBarChart,
+	TimelineChart,
 } from "../src/index.ts";
 
-type ChartTab = "bar" | "barH" | "stacked" | "stackedH" | "line" | "scatter" | "composite";
+type ChartTab =
+	| "bar"
+	| "barH"
+	| "stacked"
+	| "stackedH"
+	| "line"
+	| "scatter"
+	| "composite"
+	| "timeline";
 
 export function App() {
 	const [tab, setTab] = useState<ChartTab>("bar");
@@ -20,6 +29,7 @@ export function App() {
 		{ key: "line", label: "折れ線グラフ" },
 		{ key: "scatter", label: "散布図" },
 		{ key: "composite", label: "複合チャート" },
+		{ key: "timeline", label: "タイムライン" },
 	];
 
 	return (
@@ -54,6 +64,7 @@ export function App() {
 				{tab === "line" && <LineChartDemo />}
 				{tab === "scatter" && <ScatterChartDemo />}
 				{tab === "composite" && <CompositeChartDemo />}
+				{tab === "timeline" && <TimelineChartDemo />}
 			</div>
 		</div>
 	);
@@ -209,6 +220,39 @@ function ScatterChartDemo() {
 			xAxis={{ title: "X値" }}
 			yAxis={{ title: "Y値" }}
 			legend={{ position: "bottom" }}
+		/>
+	);
+}
+
+// ──────────────────────────────────────────
+// Composite Chart (Bar + Line)
+// ──────────────────────────────────────────
+// ──────────────────────────────────────────
+// Timeline Chart
+// ──────────────────────────────────────────
+function TimelineChartDemo() {
+	const base = new Date(2026, 1, 1); // 2026-02-01
+	const d = (offset: number) => {
+		const dt = new Date(base);
+		dt.setDate(dt.getDate() + offset);
+		return dt;
+	};
+
+	return (
+		<TimelineChart
+			width={900}
+			height={350}
+			unit="day"
+			items={[
+				{ label: "要件定義", start: d(0), end: d(5), progress: 1.0, color: "#4e79a7" },
+				{ label: "基本設計", start: d(3), end: d(10), progress: 0.8, color: "#f28e2b" },
+				{ label: "詳細設計", start: d(8), end: d(15), progress: 0.5, color: "#e15759" },
+				{ label: "実装", start: d(12), end: d(25), progress: 0.3, color: "#76b7b2" },
+				{ label: "テスト", start: d(22), end: d(30), progress: 0.0, color: "#59a14f" },
+				{ label: "リリース", start: d(28), end: d(32), progress: 0.0, color: "#edc948" },
+			]}
+			xAxis={{ title: "スケジュール" }}
+			labelConfig={{ showStart: true, showEnd: true, showProgress: true, timeFormat: "MM/DD" }}
 		/>
 	);
 }

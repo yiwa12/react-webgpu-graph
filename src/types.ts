@@ -182,6 +182,98 @@ export interface ScatterChartProps extends BaseChartProps {
 }
 
 // ============================================================
+// Timeline chart types
+// ============================================================
+
+/** Time axis scale unit */
+export type TimelineUnit = "time" | "day" | "week" | "month";
+
+/** A single timeline task item */
+export interface TimelineItem {
+	/** Item / task label (Y-axis) */
+	label: string;
+	/** Start date/time */
+	start: Date;
+	/** End date/time */
+	end: Date;
+	/** Progress 0–1 (optional) */
+	progress?: number;
+	/** Bar color (optional, falls back to palette) */
+	color?: Color;
+}
+
+/** Axis config for the timeline X-axis */
+export interface TimelineAxisConfig {
+	/** Axis title */
+	title?: string;
+	/** Title color */
+	titleColor?: Color;
+	/** Label color */
+	labelColor?: Color;
+	/** Axis line color */
+	lineColor?: Color;
+}
+
+/** Label display options for item names on the Y-axis */
+export interface TimelineLabelConfig {
+	/** Show start column */
+	showStart?: boolean;
+	/** Show end column */
+	showEnd?: boolean;
+	/** Show progress column */
+	showProgress?: boolean;
+	/** Time/date format for start/end display (e.g. "MM/DD", "HH:mm") */
+	timeFormat?: string;
+}
+
+/** Column width configuration for the Y-axis table */
+export interface TimelineColumnWidths {
+	/** Width of the task name column (default: 100) */
+	label?: number;
+	/** Width of the start column (default: 70) */
+	start?: number;
+	/** Width of the end column (default: 70) */
+	end?: number;
+	/** Width of the progress column (default: 50) */
+	progress?: number;
+}
+
+export interface TimelineChartProps {
+	/** Width in px */
+	width?: number;
+	/** Height in px */
+	height?: number;
+	/** Background color */
+	backgroundColor?: Color;
+	/** Timeline items */
+	items: TimelineItem[];
+	/** Time-axis unit (default: "day") */
+	unit?: TimelineUnit;
+	/** Time format string for "time" unit (e.g. "HH:mm:ss", "HH:mm") */
+	timeFormat?: string;
+	/** X-axis config */
+	xAxis?: TimelineAxisConfig;
+	/** Label display config */
+	labelConfig?: TimelineLabelConfig;
+	/** Initial column widths for Y-axis table */
+	columnWidths?: TimelineColumnWidths;
+	/** Tooltip config */
+	tooltip?: TooltipConfig;
+	/** Animation config */
+	animation?: AnimationConfig;
+	/** Padding [top, right, bottom, left] */
+	padding?: [number, number, number, number];
+	/** Default bar color */
+	barColor?: Color;
+	/** Progress bar color */
+	progressColor?: Color;
+	/** Bar height ratio 0–1 (default: 0.6) */
+	barHeightRatio?: number;
+	/** Callback when column widths change (from drag resize) */
+	onColumnWidthsChange?: (widths: TimelineColumnWidths) => void;
+}
+
+// ============================================================
 // Default color palette
 // ============================================================
 export const DEFAULT_COLORS: readonly string[] = [

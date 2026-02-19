@@ -40,6 +40,8 @@ export function TooltipOverlay({ info, config, containerRect }: TooltipOverlayPr
 				padding: "6px 10px",
 				borderRadius: "4px",
 				fontSize: "12px",
+				fontFamily:
+					'"Noto Sans JP", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Helvetica Neue", "Segoe UI", "Yu Gothic UI", "Yu Gothic", sans-serif',
 				whiteSpace: "nowrap",
 				boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
 			}}

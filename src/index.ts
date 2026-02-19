@@ -4,6 +4,7 @@ export { CompositeChart } from "./charts/CompositeChart.tsx";
 export { LineChart } from "./charts/LineChart.tsx";
 export { ScatterChart } from "./charts/ScatterChart.tsx";
 export { StackedBarChart } from "./charts/StackedBarChart.tsx";
+export { TimelineChart } from "./charts/TimelineChart.tsx";
 
 export type {
 	AnimationConfig,
@@ -24,6 +25,12 @@ export type {
 	ScatterPoint,
 	SharedAxes,
 	StackedBarChartProps,
+	TimelineAxisConfig,
+	TimelineChartProps,
+	TimelineColumnWidths,
+	TimelineItem,
+	TimelineLabelConfig,
+	TimelineUnit,
 	TooltipConfig,
 	TooltipInfo,
 } from "./types.ts";
