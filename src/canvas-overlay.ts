@@ -4,6 +4,7 @@ import type {
 	LegendConfig,
 	LegendHitRect,
 	LegendPosition,
+	SharedAxes,
 } from "./types.ts";
 import { formatTick } from "./utils.ts";
 
@@ -191,6 +192,110 @@ export function drawAxesHorizontal(
 		ctx.rotate(-Math.PI / 2);
 		ctx.fillText(yAxis.title, 0, 0);
 		ctx.restore();
+	}
+}
+
+// ============================================================
+// Draw composite (dual-axis) chart axes
+// ============================================================
+/**
+ * Draws axes for a composite chart.
+ *
+ * - Primary Y-axis is always on the left, primary X-axis always on the bottom.
+ * - When `sharedAxes === "x"`: secondary Y-axis drawn on the right.
+ * - When `sharedAxes === "y"`: secondary X-axis drawn on the top.
+ * - When `sharedAxes === "both"`: only primary axes are drawn.
+ */
+export function drawCompositeAxes(
+	ctx: CanvasRenderingContext2D,
+	layout: ChartLayout,
+	sharedAxes: SharedAxes,
+	primaryXTicks: { labels: string[]; positions: number[] } | null,
+	primaryYTicks: { values: number[]; positions: number[] } | null,
+	secondaryXTicks: { labels: string[]; positions: number[] } | null,
+	secondaryYTicks: { values: number[]; positions: number[] } | null,
+	xAxis?: AxisConfig,
+	yAxis?: AxisConfig,
+	xAxisSecondary?: AxisConfig,
+	yAxisSecondary?: AxisConfig,
+): void {
+	const { plotX, plotY, plotWidth, plotHeight } = layout;
+
+	// ---- Primary axes (left + bottom) ----
+	drawAxes(ctx, layout, primaryXTicks, primaryYTicks, xAxis, yAxis);
+
+	// ---- Secondary Y axis on the right (when X is shared) ----
+	if (sharedAxes === "x" && secondaryYTicks) {
+		const rightX = plotX + plotWidth;
+		const axisColor = yAxisSecondary?.lineColor ?? DEFAULT_AXIS_COLOR;
+		const labelColor = yAxisSecondary?.labelColor ?? DEFAULT_LABEL_COLOR;
+
+		// Axis line
+		ctx.strokeStyle = axisColor;
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(rightX, plotY);
+		ctx.lineTo(rightX, plotY + plotHeight);
+		ctx.stroke();
+
+		// Tick labels
+		ctx.font = DEFAULT_FONT;
+		ctx.fillStyle = labelColor;
+		ctx.textAlign = "left";
+		ctx.textBaseline = "middle";
+		for (let i = 0; i < secondaryYTicks.values.length; i++) {
+			const y = secondaryYTicks.positions[i]!;
+			const v = secondaryYTicks.values[i]!;
+			ctx.fillText(formatTick(v), rightX + 8, y);
+		}
+
+		// Title (right side, rotated)
+		if (yAxisSecondary?.title) {
+			ctx.save();
+			ctx.font = TITLE_FONT;
+			ctx.fillStyle = yAxisSecondary.titleColor ?? DEFAULT_TITLE_COLOR;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "top";
+			ctx.translate(rightX + 45, plotY + plotHeight / 2);
+			ctx.rotate(-Math.PI / 2);
+			ctx.fillText(yAxisSecondary.title, 0, 0);
+			ctx.restore();
+		}
+	}
+
+	// ---- Secondary X axis on the top (when Y is shared) ----
+	if (sharedAxes === "y" && secondaryXTicks) {
+		const topY = plotY;
+		const axisColor = xAxisSecondary?.lineColor ?? DEFAULT_AXIS_COLOR;
+		const labelColor = xAxisSecondary?.labelColor ?? DEFAULT_LABEL_COLOR;
+
+		// Axis line
+		ctx.strokeStyle = axisColor;
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(plotX, topY);
+		ctx.lineTo(plotX + plotWidth, topY);
+		ctx.stroke();
+
+		// Tick labels
+		ctx.font = DEFAULT_FONT;
+		ctx.fillStyle = labelColor;
+		ctx.textAlign = "center";
+		ctx.textBaseline = "bottom";
+		for (let i = 0; i < secondaryXTicks.labels.length; i++) {
+			const x = secondaryXTicks.positions[i]!;
+			const label = secondaryXTicks.labels[i]!;
+			ctx.fillText(label, x, topY - 8, plotWidth / secondaryXTicks.labels.length - 4);
+		}
+
+		// Title (top)
+		if (xAxisSecondary?.title) {
+			ctx.font = TITLE_FONT;
+			ctx.fillStyle = xAxisSecondary.titleColor ?? DEFAULT_TITLE_COLOR;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "bottom";
+			ctx.fillText(xAxisSecondary.title, plotX + plotWidth / 2, topY - 28);
+		}
 	}
 }
 

@@ -1,5 +1,6 @@
 // react-webgpu-graph – public API
 export { BarChart } from "./BarChart.tsx";
+export { CompositeChart } from "./CompositeChart.tsx";
 export { LineChart } from "./LineChart.tsx";
 export { ScatterChart } from "./ScatterChart.tsx";
 export { StackedBarChart } from "./StackedBarChart.tsx";
@@ -11,6 +12,7 @@ export type {
 	BarDataset,
 	BaseChartProps,
 	Color,
+	CompositeChartProps,
 	LegendConfig,
 	LegendHitRect,
 	LegendPosition,
@@ -20,6 +22,7 @@ export type {
 	ScatterChartProps,
 	ScatterDataset,
 	ScatterPoint,
+	SharedAxes,
 	StackedBarChartProps,
 	TooltipConfig,
 	TooltipInfo,

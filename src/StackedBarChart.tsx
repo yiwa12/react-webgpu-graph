@@ -10,8 +10,8 @@ import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
 
 export function StackedBarChart({
-	width,
-	height,
+	width = 400,
+	height = 300,
 	labels,
 	datasets,
 	orientation = "vertical",
@@ -336,6 +336,8 @@ export function StackedBarChart({
 		</div>
 	);
 }
+
+StackedBarChart.chartType = "stacked-bar" as const;
 
 function parseRGBA(css: string): [number, number, number, number] {
 	if (css === "#ffffff" || css === "white") return [1, 1, 1, 1];

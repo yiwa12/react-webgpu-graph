@@ -131,10 +131,10 @@ export interface ScatterDataset {
 // Chart props
 // ============================================================
 export interface BaseChartProps {
-	/** Width in px */
-	width: number;
-	/** Height in px */
-	height: number;
+	/** Width in px (optional when used inside CompositeChart) */
+	width?: number;
+	/** Height in px (optional when used inside CompositeChart) */
+	height?: number;
 	/** Background color */
 	backgroundColor?: Color;
 	/** X-axis config */
@@ -196,6 +196,46 @@ export const DEFAULT_COLORS: readonly string[] = [
 	"#9c755f",
 	"#bab0ac",
 ];
+
+// ============================================================
+// Composite chart types
+// ============================================================
+
+/** Specifies which axes are shared between layers */
+export type SharedAxes = "x" | "y" | "both";
+
+export interface CompositeChartProps {
+	/** Width in px */
+	width: number;
+	/** Height in px */
+	height: number;
+	/** Background color */
+	backgroundColor?: Color;
+
+	/** Which axes are shared (default: "x") */
+	sharedAxes?: SharedAxes;
+
+	/** Primary Y-axis config (left) */
+	yAxis?: AxisConfig;
+	/** Secondary Y-axis config (right, used when sharedAxes !== "y" and !== "both") */
+	yAxisSecondary?: AxisConfig;
+	/** Primary X-axis config (bottom) */
+	xAxis?: AxisConfig;
+	/** Secondary X-axis config (top, used when sharedAxes !== "x" and !== "both") */
+	xAxisSecondary?: AxisConfig;
+
+	/** Legend config */
+	legend?: LegendConfig;
+	/** Tooltip config */
+	tooltip?: TooltipConfig;
+	/** Animation config */
+	animation?: AnimationConfig;
+	/** Padding [top, right, bottom, left] */
+	padding?: [number, number, number, number];
+
+	/** Chart component children (BarChart, LineChart, ScatterChart, StackedBarChart) */
+	children: ReactNode;
+}
 
 // ============================================================
 // Legend hit-test rectangle (for click toggling)

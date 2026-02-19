@@ -1,4 +1,4 @@
-import type { AxisConfig, ChartLayout } from "./types.ts";
+import type { AxisConfig, ChartLayout, SharedAxes } from "./types.ts";
 
 /**
  * Compute "nice" tick values for an axis.
@@ -104,4 +104,54 @@ export function mapValue(
 ): number {
 	const ratio = (value - dataMin) / (dataMax - dataMin || 1);
 	return pixelStart + ratio * pixelLength;
+}
+
+/**
+ * Compute chart layout for composite (dual-axis) charts.
+ *
+ * When `sharedAxes` is `"x"` → extra space on the right for the secondary Y axis.
+ * When `sharedAxes` is `"y"` → extra space on the top for the secondary X axis.
+ * When `sharedAxes` is `"both"` → same as single-axis layout (no extra space).
+ */
+export function computeCompositeLayout(
+	width: number,
+	height: number,
+	sharedAxes: SharedAxes,
+	padding?: [number, number, number, number],
+	hasXTitle = false,
+	hasYTitle = false,
+	hasSecondaryXTitle = false,
+	hasSecondaryYTitle = false,
+	legendHeight = 0,
+	legendPosition: "top" | "bottom" | "float" = "bottom",
+): ChartLayout {
+	const [pt, pr, pb, pl] = padding ?? [20, 20, 20, 20];
+
+	const yLabelWidth = 50 + (hasYTitle ? 20 : 0);
+	const xLabelHeight = 30 + (hasXTitle ? 20 : 0);
+
+	// Secondary axis space
+	const rightExtra =
+		sharedAxes === "x" || sharedAxes === "both" ? 0 : 50 + (hasSecondaryYTitle ? 20 : 0);
+	const topExtra2 =
+		sharedAxes === "y" || sharedAxes === "both" ? 0 : 30 + (hasSecondaryXTitle ? 20 : 0);
+
+	let topExtra = topExtra2;
+	let bottomExtra = 0;
+	if (legendPosition === "top") topExtra += legendHeight;
+	else if (legendPosition === "bottom") bottomExtra = legendHeight;
+
+	const plotX = pl + yLabelWidth;
+	const plotY = pt + topExtra;
+	const plotWidth = width - plotX - pr - rightExtra;
+	const plotHeight = height - plotY - pb - xLabelHeight - bottomExtra;
+
+	return {
+		canvasWidth: width,
+		canvasHeight: height,
+		plotX,
+		plotY,
+		plotWidth: Math.max(plotWidth, 10),
+		plotHeight: Math.max(plotHeight, 10),
+	};
 }

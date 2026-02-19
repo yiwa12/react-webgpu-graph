@@ -10,8 +10,8 @@ import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
 
 export function ScatterChart({
-	width,
-	height,
+	width = 400,
+	height = 300,
 	datasets,
 	xAxis,
 	yAxis,
@@ -284,6 +284,8 @@ export function ScatterChart({
 		</div>
 	);
 }
+
+ScatterChart.chartType = "scatter" as const;
 
 function formatTick(v: number): string {
 	if (Number.isInteger(v)) return v.toString();

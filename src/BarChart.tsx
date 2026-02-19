@@ -10,8 +10,8 @@ import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
 
 export function BarChart({
-	width,
-	height,
+	width = 400,
+	height = 300,
 	labels,
 	datasets,
 	orientation = "vertical",
@@ -367,6 +367,8 @@ export function BarChart({
 		</div>
 	);
 }
+
+BarChart.chartType = "bar" as const;
 
 function parseRGBA(css: string): [number, number, number, number] {
 	if (css === "#ffffff" || css === "white") return [1, 1, 1, 1];

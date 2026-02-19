@@ -1,7 +1,13 @@
 import { useState } from "react";
-import { BarChart, LineChart, ScatterChart, StackedBarChart } from "../src/index.ts";
+import {
+	BarChart,
+	CompositeChart,
+	LineChart,
+	ScatterChart,
+	StackedBarChart,
+} from "../src/index.ts";
 
-type ChartTab = "bar" | "barH" | "stacked" | "stackedH" | "line" | "scatter";
+type ChartTab = "bar" | "barH" | "stacked" | "stackedH" | "line" | "scatter" | "composite";
 
 export function App() {
 	const [tab, setTab] = useState<ChartTab>("bar");
@@ -13,6 +19,7 @@ export function App() {
 		{ key: "stackedH", label: "積み上げ(横)" },
 		{ key: "line", label: "折れ線グラフ" },
 		{ key: "scatter", label: "散布図" },
+		{ key: "composite", label: "複合チャート" },
 	];
 
 	return (
@@ -46,6 +53,7 @@ export function App() {
 				{tab === "stackedH" && <StackedBarChartHorizontalDemo />}
 				{tab === "line" && <LineChartDemo />}
 				{tab === "scatter" && <ScatterChartDemo />}
+				{tab === "composite" && <CompositeChartDemo />}
 			</div>
 		</div>
 	);
@@ -202,5 +210,43 @@ function ScatterChartDemo() {
 			yAxis={{ title: "Y値" }}
 			legend={{ position: "bottom" }}
 		/>
+	);
+}
+
+// ──────────────────────────────────────────
+// Composite Chart (Bar + Line)
+// ──────────────────────────────────────────
+function CompositeChartDemo() {
+	const labels = ["1月", "2月", "3月", "4月", "5月", "6月"];
+
+	return (
+		<CompositeChart
+			width={700}
+			height={400}
+			sharedAxes="x"
+			yAxis={{ title: "売上 (万円)" }}
+			yAxisSecondary={{ title: "成長率 (%)" }}
+			xAxis={{ title: "月" }}
+			legend={{ position: "top" }}
+		>
+			<BarChart
+				labels={labels}
+				datasets={[
+					{ label: "売上A", data: [120, 200, 150, 80, 70, 110] },
+					{ label: "売上B", data: [90, 160, 130, 100, 40, 95], color: "#f28e2b" },
+				]}
+			/>
+			<LineChart
+				labels={labels}
+				datasets={[
+					{
+						label: "成長率",
+						data: [5, 15, -8, 12, -5, 20],
+						color: "#e15759",
+						lineWidth: 3,
+					},
+				]}
+			/>
+		</CompositeChart>
 	);
 }
