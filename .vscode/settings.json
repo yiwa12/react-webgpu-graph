@@ -15,5 +15,15 @@
 	},
 	"editor.codeActionsOnSave": {
 		"source.fixAll.biome": "explicit"
-	}
+	},
+	"files.eol": "\n",
+	"github.copilot.chat.commitMessageGeneration.instructions": [
+		{
+			"text": "日本語で回答します。"
+		},
+		{
+			"text": "先頭に接頭辞（prefix）を付けてください。"
+		}
+	],
+	"references.preferredLocation": "view"
 }
