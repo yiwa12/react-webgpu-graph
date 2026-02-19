@@ -131,10 +131,12 @@ export function computeCompositeLayout(
 	const xLabelHeight = 30 + (hasXTitle ? 20 : 0);
 
 	// Secondary axis space
+	// When X is shared, Y axes are independent → need right space for secondary Y
+	// When Y is shared, X axes are independent → need top space for secondary X
 	const rightExtra =
-		sharedAxes === "x" || sharedAxes === "both" ? 0 : 50 + (hasSecondaryYTitle ? 20 : 0);
+		sharedAxes === "y" || sharedAxes === "both" ? 0 : 50 + (hasSecondaryYTitle ? 20 : 0);
 	const topExtra2 =
-		sharedAxes === "y" || sharedAxes === "both" ? 0 : 30 + (hasSecondaryXTitle ? 20 : 0);
+		sharedAxes === "x" || sharedAxes === "both" ? 0 : 30 + (hasSecondaryXTitle ? 20 : 0);
 
 	let topExtra = topExtra2;
 	let bottomExtra = 0;
