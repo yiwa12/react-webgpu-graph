@@ -1,20 +1,19 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { drawAxes, drawAxesHorizontal, drawLegend } from "./canvas-overlay.ts";
-import type { Rect } from "./gpu-renderer.ts";
-import { TooltipOverlay } from "./Tooltip.tsx";
-import type { ChartLayout, LegendHitRect, StackedBarChartProps, TooltipInfo } from "./types.ts";
-import { DEFAULT_COLORS } from "./types.ts";
-import { useChartAnimation } from "./use-chart-animation.ts";
-import { useWebGPU } from "./use-webgpu.ts";
-import { computeLayout, computeTicks, mapValue } from "./utils.ts";
+import { drawAxes, drawLegend } from "../rendering/canvas-overlay.ts";
+import type { Circle, Line as GpuLine } from "../rendering/gpu-renderer.ts";
+import { useWebGPU } from "../rendering/use-webgpu.ts";
+import type { ChartLayout, LegendHitRect, LineChartProps, TooltipInfo } from "../types.ts";
+import { DEFAULT_COLORS } from "../types.ts";
+import { TooltipOverlay } from "../ui/Tooltip.tsx";
+import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { computeLayout, computeTicks, mapValue } from "../utils.ts";
 
-export function StackedBarChart({
+export function LineChart({
 	width = 400,
 	height = 300,
 	labels,
 	datasets,
-	orientation = "vertical",
 	xAxis,
 	yAxis,
 	legend,
@@ -22,7 +21,7 @@ export function StackedBarChart({
 	animation,
 	backgroundColor,
 	padding,
-}: StackedBarChartProps) {
+}: LineChartProps) {
 	const { canvasRef, ready, fallback, getRenderer } = useWebGPU(width, height);
 	const overlayRef = useRef<HTMLCanvasElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -54,27 +53,16 @@ export function StackedBarChart({
 		[width, height, padding, xAxis?.title, yAxis?.title, legendHeight, legendPos],
 	);
 
-	// Compute stacked max
-	const stackedMax = useMemo(() => {
-		let maxVal = 0;
-		for (let ci = 0; ci < labels.length; ci++) {
-			let sum = 0;
-			for (const ds of datasets) {
-				sum += ds.data[ci] ?? 0;
-			}
-			maxVal = Math.max(maxVal, sum);
-		}
-		return maxVal;
-	}, [datasets, labels]);
+	const allValues = useMemo(() => datasets.flatMap((ds) => ds.data), [datasets]);
+	const dataMin = Math.min(...allValues);
+	const dataMax = Math.max(...allValues);
 
 	// Compute ticks (shared between overlay and renderFrame)
-	const ticksInfo = useMemo(
-		() => computeTicks(0, stackedMax, orientation === "vertical" ? yAxis : xAxis),
-		[stackedMax, orientation, xAxis, yAxis],
-	);
+	const ticksInfo = useMemo(() => computeTicks(dataMin, dataMax, yAxis), [dataMin, dataMax, yAxis]);
 
-	const hitRectsRef = useRef<
-		{ rect: { x: number; y: number; w: number; h: number }; seriesIdx: number; catIdx: number }[]
+	// Hit points for tooltip
+	const hitPointsRef = useRef<
+		{ cx: number; cy: number; r: number; seriesIdx: number; catIdx: number }[]
 	>([]);
 
 	// ---- GPU render function (called on every animation frame) ----
@@ -82,70 +70,71 @@ export function StackedBarChart({
 		const renderer = getRenderer();
 		if (!renderer) return;
 
-		const rects: Rect[] = [];
-		const hitRects: (typeof hitRectsRef.current)[number][] = [];
+		const lines: GpuLine[] = [];
+		const circles: Circle[] = [];
+		const hitPoints: (typeof hitPointsRef.current)[number][] = [];
 		const { plotX, plotY, plotWidth, plotHeight } = layout;
 		const { min, max } = ticksInfo;
 
-		if (orientation === "vertical") {
-			const groupWidth = plotWidth / labels.length;
-			const barWidth = groupWidth * 0.7;
-			const groupPad = groupWidth * 0.15;
+		// Baseline Y position (value = midpoint or clamped 0)
+		const baselineVal = Math.max(min, Math.min(max, 0));
+		const baselineY = mapValue(baselineVal, min, max, plotY + plotHeight, -plotHeight);
 
-			for (let ci = 0; ci < labels.length; ci++) {
-				let cumulative = 0;
-				for (let di = 0; di < datasets.length; di++) {
-					const vis = seriesVis[di] ?? 1;
-					if (vis <= 0.001) continue;
-					const val = (datasets[di]?.data[ci] ?? 0) * vis * enterProgress;
-					const x = plotX + ci * groupWidth + groupPad;
-					const yBottom = mapValue(cumulative, min, max, plotY + plotHeight, -plotHeight);
-					const yTop = mapValue(cumulative + val, min, max, plotY + plotHeight, -plotHeight);
-					const rectY = Math.min(yBottom, yTop);
-					const rectH = Math.abs(yTop - yBottom);
-					if (rectH > 0.1) {
-						rects.push({ x, y: rectY, w: barWidth, h: rectH, color: colors[di]! });
-						hitRects.push({
-							rect: { x, y: rectY, w: barWidth, h: rectH },
-							seriesIdx: di,
-							catIdx: ci,
-						});
-					}
-					cumulative += val;
-				}
+		for (let di = 0; di < datasets.length; di++) {
+			const vis = seriesVis[di] ?? 1;
+			if (vis <= 0.001) continue;
+			const ds = datasets[di]!;
+			const color = colors[di]!;
+			const lineWidth = ds.lineWidth ?? 2;
+			const showPoints = ds.showPoints !== false;
+			const pointRadius = ds.pointRadius ?? 4;
+
+			const animFactor = enterProgress * vis;
+
+			const points: { x: number; y: number }[] = [];
+			for (let ci = 0; ci < ds.data.length; ci++) {
+				const val = ds.data[ci] ?? 0;
+				const x = plotX + (ci + 0.5) * (plotWidth / labels.length);
+				const yTarget = mapValue(val, min, max, plotY + plotHeight, -plotHeight);
+				const y = baselineY + (yTarget - baselineY) * animFactor;
+				points.push({ x, y });
 			}
-		} else {
-			// Horizontal
-			const groupHeight = plotHeight / labels.length;
-			const barHeight = groupHeight * 0.7;
-			const groupPad = groupHeight * 0.15;
 
-			for (let ci = 0; ci < labels.length; ci++) {
-				let cumulative = 0;
-				for (let di = 0; di < datasets.length; di++) {
-					const vis = seriesVis[di] ?? 1;
-					if (vis <= 0.001) continue;
-					const val = (datasets[di]?.data[ci] ?? 0) * vis * enterProgress;
-					const y = plotY + ci * groupHeight + groupPad;
-					const xLeft = mapValue(cumulative, min, max, plotX, plotWidth);
-					const xRight = mapValue(cumulative + val, min, max, plotX, plotWidth);
-					const rectX = Math.min(xLeft, xRight);
-					const rectW = Math.abs(xRight - xLeft);
-					if (rectW > 0.1) {
-						rects.push({ x: rectX, y, w: rectW, h: barHeight, color: colors[di]! });
-						hitRects.push({
-							rect: { x: rectX, y, w: rectW, h: barHeight },
-							seriesIdx: di,
-							catIdx: ci,
-						});
+			// Lines between points
+			for (let i = 0; i < points.length - 1; i++) {
+				const p0 = points[i]!;
+				const p1 = points[i + 1]!;
+				lines.push({
+					x1: p0.x,
+					y1: p0.y,
+					x2: p1.x,
+					y2: p1.y,
+					color,
+					width: lineWidth,
+				});
+			}
+
+			// Points
+			if (showPoints) {
+				for (let ci = 0; ci < points.length; ci++) {
+					const p = points[ci]!;
+					const animR = pointRadius * animFactor;
+					if (animR > 0.1) {
+						circles.push({ cx: p.x, cy: p.y, r: animR, color });
 					}
-					cumulative += val;
+					hitPoints.push({ cx: p.x, cy: p.y, r: pointRadius + 4, seriesIdx: di, catIdx: ci });
+				}
+			} else {
+				// Invisible hit points for tooltip
+				for (let ci = 0; ci < points.length; ci++) {
+					const p = points[ci]!;
+					hitPoints.push({ cx: p.x, cy: p.y, r: 8, seriesIdx: di, catIdx: ci });
 				}
 			}
 		}
 
-		hitRectsRef.current = hitRects;
-		renderer.draw(rects, [], [], parseRGBA(backgroundColor ?? "#ffffff"));
+		hitPointsRef.current = hitPoints;
+		renderer.draw([], lines, circles, parseRGBA(backgroundColor ?? "#ffffff"));
 	};
 
 	// ---- Animation hook (drives rAF loop) ----
@@ -172,31 +161,17 @@ export function StackedBarChart({
 		if (!ctx) return;
 		ctx.clearRect(0, 0, width, height);
 
-		if (orientation === "vertical") {
-			const groupWidth = plotWidth / labels.length;
-			const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
-			const xPositions = labels.map((_, i) => plotX + (i + 0.5) * groupWidth);
-			drawAxes(
-				ctx,
-				layout,
-				{ labels, positions: xPositions },
-				{ values: ticks, positions: yPositions },
-				xAxis,
-				yAxis,
-			);
-		} else {
-			const groupHeight = plotHeight / labels.length;
-			const xPositions = ticks.map((v) => mapValue(v, min, max, plotX, plotWidth));
-			const yPositions = labels.map((_, i) => plotY + (i + 0.5) * groupHeight);
-			drawAxesHorizontal(
-				ctx,
-				layout,
-				{ labels, positions: yPositions },
-				{ values: ticks, positions: xPositions },
-				xAxis,
-				yAxis,
-			);
-		}
+		const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
+		const xPositions = labels.map((_, i) => plotX + (i + 0.5) * (plotWidth / labels.length));
+
+		drawAxes(
+			ctx,
+			layout,
+			{ labels, positions: xPositions },
+			{ values: ticks, positions: yPositions },
+			xAxis,
+			yAxis,
+		);
 
 		if (legend?.visible !== false) {
 			legendHitRectsRef.current = drawLegend(
@@ -211,7 +186,6 @@ export function StackedBarChart({
 		drawOnce();
 	}, [
 		ready,
-		orientation,
 		layout,
 		ticksInfo,
 		labels,
@@ -242,26 +216,30 @@ export function StackedBarChart({
 				containerRef.current.style.cursor = overLegend ? "pointer" : "default";
 			}
 
-			for (const hr of hitRectsRef.current) {
-				if (
-					mx >= hr.rect.x &&
-					mx <= hr.rect.x + hr.rect.w &&
-					my >= hr.rect.y &&
-					my <= hr.rect.y + hr.rect.h
-				) {
-					const ds = datasets[hr.seriesIdx]!;
-					setTooltipInfo({
-						seriesName: ds.label,
-						label: labels[hr.catIdx] ?? "",
-						value: ds.data[hr.catIdx] ?? 0,
-						color: colors[hr.seriesIdx]!,
-						x: mx,
-						y: my,
-					});
-					return;
+			let closest: (typeof hitPointsRef.current)[number] | null = null;
+			let closestDist = Number.POSITIVE_INFINITY;
+
+			for (const hp of hitPointsRef.current) {
+				const dist = Math.sqrt((mx - hp.cx) ** 2 + (my - hp.cy) ** 2);
+				if (dist <= hp.r && dist < closestDist) {
+					closest = hp;
+					closestDist = dist;
 				}
 			}
-			setTooltipInfo(null);
+
+			if (closest) {
+				const ds = datasets[closest.seriesIdx]!;
+				setTooltipInfo({
+					seriesName: ds.label,
+					label: labels[closest.catIdx] ?? "",
+					value: ds.data[closest.catIdx] ?? 0,
+					color: colors[closest.seriesIdx]!,
+					x: mx,
+					y: my,
+				});
+			} else {
+				setTooltipInfo(null);
+			}
 		},
 		[datasets, labels, colors],
 	);
@@ -337,7 +315,7 @@ export function StackedBarChart({
 	);
 }
 
-StackedBarChart.chartType = "stacked-bar" as const;
+LineChart.chartType = "line" as const;
 
 function parseRGBA(css: string): [number, number, number, number] {
 	if (css === "#ffffff" || css === "white") return [1, 1, 1, 1];

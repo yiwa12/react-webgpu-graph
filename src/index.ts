@@ -1,9 +1,9 @@
 // react-webgpu-graph – public API
-export { BarChart } from "./BarChart.tsx";
-export { CompositeChart } from "./CompositeChart.tsx";
-export { LineChart } from "./LineChart.tsx";
-export { ScatterChart } from "./ScatterChart.tsx";
-export { StackedBarChart } from "./StackedBarChart.tsx";
+export { BarChart } from "./charts/BarChart.tsx";
+export { CompositeChart } from "./charts/CompositeChart.tsx";
+export { LineChart } from "./charts/LineChart.tsx";
+export { ScatterChart } from "./charts/ScatterChart.tsx";
+export { StackedBarChart } from "./charts/StackedBarChart.tsx";
 
 export type {
 	AnimationConfig,

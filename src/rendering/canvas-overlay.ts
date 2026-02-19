@@ -5,8 +5,8 @@ import type {
 	LegendHitRect,
 	LegendPosition,
 	SharedAxes,
-} from "./types.ts";
-import { formatTick } from "./utils.ts";
+} from "../types.ts";
+import { formatTick } from "../utils.ts";
 
 const DEFAULT_FONT = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const TITLE_FONT = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';

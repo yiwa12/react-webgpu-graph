@@ -1,8 +1,8 @@
 import type React from "react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { drawCompositeAxes, drawLegend } from "./canvas-overlay.ts";
-import type { Circle, Line as GpuLine, Rect } from "./gpu-renderer.ts";
-import { TooltipOverlay } from "./Tooltip.tsx";
+import { drawCompositeAxes, drawLegend } from "../rendering/canvas-overlay.ts";
+import type { Circle, Line as GpuLine, Rect } from "../rendering/gpu-renderer.ts";
+import { useWebGPU } from "../rendering/use-webgpu.ts";
 import type {
 	BarChartProps,
 	BarDataset,
@@ -15,11 +15,11 @@ import type {
 	ScatterDataset,
 	StackedBarChartProps,
 	TooltipInfo,
-} from "./types.ts";
-import { DEFAULT_COLORS } from "./types.ts";
-import { useChartAnimation } from "./use-chart-animation.ts";
-import { useWebGPU } from "./use-webgpu.ts";
-import { computeCompositeLayout, computeTicks, formatTick, mapValue } from "./utils.ts";
+} from "../types.ts";
+import { DEFAULT_COLORS } from "../types.ts";
+import { TooltipOverlay } from "../ui/Tooltip.tsx";
+import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { computeCompositeLayout, computeTicks, formatTick, mapValue } from "../utils.ts";
 
 // ============================================================
 // Internal types

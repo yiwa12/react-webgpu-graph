@@ -1,4 +1,4 @@
-import type { TooltipConfig, TooltipInfo } from "./types.ts";
+import type { TooltipConfig, TooltipInfo } from "../types.ts";
 
 interface TooltipOverlayProps {
 	info: TooltipInfo | null;

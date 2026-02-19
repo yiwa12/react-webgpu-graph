@@ -1,13 +1,13 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { drawAxes, drawLegend } from "./canvas-overlay.ts";
-import type { Circle } from "./gpu-renderer.ts";
-import { TooltipOverlay } from "./Tooltip.tsx";
-import type { ChartLayout, LegendHitRect, ScatterChartProps, TooltipInfo } from "./types.ts";
-import { DEFAULT_COLORS } from "./types.ts";
-import { useChartAnimation } from "./use-chart-animation.ts";
-import { useWebGPU } from "./use-webgpu.ts";
-import { computeLayout, computeTicks, mapValue } from "./utils.ts";
+import { drawAxes, drawLegend } from "../rendering/canvas-overlay.ts";
+import type { Circle } from "../rendering/gpu-renderer.ts";
+import { useWebGPU } from "../rendering/use-webgpu.ts";
+import type { ChartLayout, LegendHitRect, ScatterChartProps, TooltipInfo } from "../types.ts";
+import { DEFAULT_COLORS } from "../types.ts";
+import { TooltipOverlay } from "../ui/Tooltip.tsx";
+import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { computeLayout, computeTicks, mapValue } from "../utils.ts";
 
 export function ScatterChart({
 	width = 400,
