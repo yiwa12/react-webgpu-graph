@@ -1,0 +1,26 @@
+{
+	"name": "react-webgpu-graph",
+	"version": "0.1.0",
+	"type": "module",
+	"main": "src/index.ts",
+	"scripts": {
+		"dev": "bun run sample/server.ts",
+		"build": "bun build src/index.ts --outdir dist --target browser",
+		"format": "biome format --write .",
+		"lint": "biome lint ."
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.2",
+		"@types/bun": "latest",
+		"@webgpu/types": "^0.1.69"
+	},
+	"peerDependencies": {
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@types/react": "^19.2.14",
+		"@types/react-dom": "^19.2.3",
+		"react": "^19.2.4",
+		"react-dom": "^19.2.4"
+	}
+}
