@@ -5,6 +5,7 @@ import type { Circle, Line as GpuLine } from "./gpu-renderer.ts";
 import { TooltipOverlay } from "./Tooltip.tsx";
 import type { ChartLayout, LegendHitRect, LineChartProps, TooltipInfo } from "./types.ts";
 import { DEFAULT_COLORS } from "./types.ts";
+import { useChartAnimation } from "./use-chart-animation.ts";
 import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
 
@@ -17,6 +18,7 @@ export function LineChart({
 	yAxis,
 	legend,
 	tooltip,
+	animation,
 	backgroundColor,
 	padding,
 }: LineChartProps) {
@@ -55,13 +57,16 @@ export function LineChart({
 	const dataMin = Math.min(...allValues);
 	const dataMax = Math.max(...allValues);
 
+	// Compute ticks (shared between overlay and renderFrame)
+	const ticksInfo = useMemo(() => computeTicks(dataMin, dataMax, yAxis), [dataMin, dataMax, yAxis]);
+
 	// Hit points for tooltip
 	const hitPointsRef = useRef<
 		{ cx: number; cy: number; r: number; seriesIdx: number; catIdx: number }[]
 	>([]);
 
-	useEffect(() => {
-		if (!ready) return;
+	// ---- GPU render function (called on every animation frame) ----
+	const renderFrame = (enterProgress: number, seriesVis: number[]) => {
 		const renderer = getRenderer();
 		if (!renderer) return;
 
@@ -69,22 +74,29 @@ export function LineChart({
 		const circles: Circle[] = [];
 		const hitPoints: (typeof hitPointsRef.current)[number][] = [];
 		const { plotX, plotY, plotWidth, plotHeight } = layout;
+		const { min, max } = ticksInfo;
 
-		const { min, max, ticks } = computeTicks(dataMin, dataMax, yAxis);
+		// Baseline Y position (value = midpoint or clamped 0)
+		const baselineVal = Math.max(min, Math.min(max, 0));
+		const baselineY = mapValue(baselineVal, min, max, plotY + plotHeight, -plotHeight);
 
 		for (let di = 0; di < datasets.length; di++) {
-			if (hiddenSeries.has(di)) continue;
+			const vis = seriesVis[di] ?? 1;
+			if (vis <= 0.001) continue;
 			const ds = datasets[di]!;
 			const color = colors[di]!;
 			const lineWidth = ds.lineWidth ?? 2;
 			const showPoints = ds.showPoints !== false;
 			const pointRadius = ds.pointRadius ?? 4;
 
+			const animFactor = enterProgress * vis;
+
 			const points: { x: number; y: number }[] = [];
 			for (let ci = 0; ci < ds.data.length; ci++) {
 				const val = ds.data[ci] ?? 0;
 				const x = plotX + (ci + 0.5) * (plotWidth / labels.length);
-				const y = mapValue(val, min, max, plotY + plotHeight, -plotHeight);
+				const yTarget = mapValue(val, min, max, plotY + plotHeight, -plotHeight);
+				const y = baselineY + (yTarget - baselineY) * animFactor;
 				points.push({ x, y });
 			}
 
@@ -106,11 +118,14 @@ export function LineChart({
 			if (showPoints) {
 				for (let ci = 0; ci < points.length; ci++) {
 					const p = points[ci]!;
-					circles.push({ cx: p.x, cy: p.y, r: pointRadius, color });
+					const animR = pointRadius * animFactor;
+					if (animR > 0.1) {
+						circles.push({ cx: p.x, cy: p.y, r: animR, color });
+					}
 					hitPoints.push({ cx: p.x, cy: p.y, r: pointRadius + 4, seriesIdx: di, catIdx: ci });
 				}
 			} else {
-				// Still add invisible hit points for tooltip
+				// Invisible hit points for tooltip
 				for (let ci = 0; ci < points.length; ci++) {
 					const p = points[ci]!;
 					hitPoints.push({ cx: p.x, cy: p.y, r: 8, seriesIdx: di, catIdx: ci });
@@ -119,55 +134,70 @@ export function LineChart({
 		}
 
 		hitPointsRef.current = hitPoints;
+		renderer.draw([], lines, circles, parseRGBA(backgroundColor ?? "#ffffff"));
+	};
 
-		const bgColor = backgroundColor ?? "#ffffff";
-		renderer.draw([], lines, circles, parseRGBA(bgColor));
+	// ---- Animation hook (drives rAF loop) ----
+	const { drawOnce } = useChartAnimation(
+		datasets.length,
+		hiddenSeries,
+		ready,
+		renderFrame,
+		animation?.duration,
+		animation?.enabled,
+	);
 
-		// Overlay
+	// ---- Overlay (Canvas 2D – axes / labels / legend) ----
+	useEffect(() => {
+		if (!ready) return;
+		const { ticks, min, max } = ticksInfo;
+		const { plotX, plotY, plotWidth, plotHeight } = layout;
+
 		const overlay = overlayRef.current;
-		if (overlay) {
-			overlay.width = width;
-			overlay.height = height;
-			const ctx = overlay.getContext("2d");
-			if (ctx) {
-				ctx.clearRect(0, 0, width, height);
-				const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
-				const xPositions = labels.map((_, i) => plotX + (i + 0.5) * (plotWidth / labels.length));
-				drawAxes(
-					ctx,
-					layout,
-					{ labels, positions: xPositions },
-					{ values: ticks, positions: yPositions },
-					xAxis,
-					yAxis,
-				);
-				if (legend?.visible !== false) {
-					legendHitRectsRef.current = drawLegend(
-						ctx,
-						layout,
-						datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
-						legend,
-						hiddenSeries,
-					);
-				}
-			}
+		if (!overlay) return;
+		overlay.width = width;
+		overlay.height = height;
+		const ctx = overlay.getContext("2d");
+		if (!ctx) return;
+		ctx.clearRect(0, 0, width, height);
+
+		const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
+		const xPositions = labels.map((_, i) => plotX + (i + 0.5) * (plotWidth / labels.length));
+
+		drawAxes(
+			ctx,
+			layout,
+			{ labels, positions: xPositions },
+			{ values: ticks, positions: yPositions },
+			xAxis,
+			yAxis,
+		);
+
+		if (legend?.visible !== false) {
+			legendHitRectsRef.current = drawLegend(
+				ctx,
+				layout,
+				datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
+				legend,
+				hiddenSeries,
+			);
 		}
+
+		drawOnce();
 	}, [
 		ready,
-		datasets,
-		labels,
 		layout,
+		ticksInfo,
+		labels,
+		datasets,
+		colors,
+		legend,
 		xAxis,
 		yAxis,
-		legend,
-		colors,
-		backgroundColor,
-		dataMin,
-		dataMax,
-		getRenderer,
 		width,
 		height,
 		hiddenSeries,
+		drawOnce,
 	]);
 
 	const handleMouseMove = useCallback(

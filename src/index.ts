@@ -5,6 +5,7 @@ export { ScatterChart } from "./ScatterChart.tsx";
 export { StackedBarChart } from "./StackedBarChart.tsx";
 
 export type {
+	AnimationConfig,
 	AxisConfig,
 	BarChartProps,
 	BarDataset,

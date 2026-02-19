@@ -5,6 +5,7 @@ import type { Circle } from "./gpu-renderer.ts";
 import { TooltipOverlay } from "./Tooltip.tsx";
 import type { ChartLayout, LegendHitRect, ScatterChartProps, TooltipInfo } from "./types.ts";
 import { DEFAULT_COLORS } from "./types.ts";
+import { useChartAnimation } from "./use-chart-animation.ts";
 import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
 
@@ -16,6 +17,7 @@ export function ScatterChart({
 	yAxis,
 	legend,
 	tooltip,
+	animation,
 	backgroundColor,
 	padding,
 }: ScatterChartProps) {
@@ -58,12 +60,16 @@ export function ScatterChart({
 	const yMin = Math.min(...allY);
 	const yMax = Math.max(...allY);
 
+	// Compute ticks (shared between overlay and renderFrame)
+	const xTickInfo = useMemo(() => computeTicks(xMin, xMax, xAxis), [xMin, xMax, xAxis]);
+	const yTickInfo = useMemo(() => computeTicks(yMin, yMax, yAxis), [yMin, yMax, yAxis]);
+
 	const hitPointsRef = useRef<
 		{ cx: number; cy: number; r: number; seriesIdx: number; pointIdx: number }[]
 	>([]);
 
-	useEffect(() => {
-		if (!ready) return;
+	// ---- GPU render function (called on every animation frame) ----
+	const renderFrame = (enterProgress: number, seriesVis: number[]) => {
 		const renderer = getRenderer();
 		if (!renderer) return;
 
@@ -71,85 +77,96 @@ export function ScatterChart({
 		const hitPoints: (typeof hitPointsRef.current)[number][] = [];
 		const { plotX, plotY, plotWidth, plotHeight } = layout;
 
-		const xTickInfo = computeTicks(xMin, xMax, xAxis);
-		const yTickInfo = computeTicks(yMin, yMax, yAxis);
-
 		for (let di = 0; di < datasets.length; di++) {
-			if (hiddenSeries.has(di)) continue;
+			const vis = seriesVis[di] ?? 1;
+			if (vis <= 0.001) continue;
 			const ds = datasets[di]!;
 			const color = colors[di]!;
 			const radius = ds.pointRadius ?? 4;
+			const animR = radius * enterProgress * vis;
 
 			for (let pi = 0; pi < ds.data.length; pi++) {
 				const pt = ds.data[pi]!;
 				const cx = mapValue(pt.x, xTickInfo.min, xTickInfo.max, plotX, plotWidth);
 				const cy = mapValue(pt.y, yTickInfo.min, yTickInfo.max, plotY + plotHeight, -plotHeight);
-				circles.push({ cx, cy, r: radius, color });
+				if (animR > 0.1) {
+					circles.push({ cx, cy, r: animR, color });
+				}
 				hitPoints.push({ cx, cy, r: radius + 4, seriesIdx: di, pointIdx: pi });
 			}
 		}
 
 		hitPointsRef.current = hitPoints;
+		renderer.draw([], [], circles, parseRGBA(backgroundColor ?? "#ffffff"));
+	};
 
-		const bgColor = backgroundColor ?? "#ffffff";
-		renderer.draw([], [], circles, parseRGBA(bgColor));
+	// ---- Animation hook (drives rAF loop) ----
+	const { drawOnce } = useChartAnimation(
+		datasets.length,
+		hiddenSeries,
+		ready,
+		renderFrame,
+		animation?.duration,
+		animation?.enabled,
+	);
 
-		// Overlay
+	// ---- Overlay (Canvas 2D – axes / labels / legend) ----
+	useEffect(() => {
+		if (!ready) return;
+		const { plotX, plotY, plotWidth, plotHeight } = layout;
+
 		const overlay = overlayRef.current;
-		if (overlay) {
-			overlay.width = width;
-			overlay.height = height;
-			const ctx = overlay.getContext("2d");
-			if (ctx) {
-				ctx.clearRect(0, 0, width, height);
+		if (!overlay) return;
+		overlay.width = width;
+		overlay.height = height;
+		const ctx = overlay.getContext("2d");
+		if (!ctx) return;
+		ctx.clearRect(0, 0, width, height);
 
-				const xPositions = xTickInfo.ticks.map((v) =>
-					mapValue(v, xTickInfo.min, xTickInfo.max, plotX, plotWidth),
-				);
-				const yPositions = yTickInfo.ticks.map((v) =>
-					mapValue(v, yTickInfo.min, yTickInfo.max, plotY + plotHeight, -plotHeight),
-				);
+		const xPositions = xTickInfo.ticks.map((v) =>
+			mapValue(v, xTickInfo.min, xTickInfo.max, plotX, plotWidth),
+		);
+		const yPositions = yTickInfo.ticks.map((v) =>
+			mapValue(v, yTickInfo.min, yTickInfo.max, plotY + plotHeight, -plotHeight),
+		);
 
-				drawAxes(
-					ctx,
-					layout,
-					{
-						labels: xTickInfo.ticks.map((v) => formatTick(v)),
-						positions: xPositions,
-					},
-					{ values: yTickInfo.ticks, positions: yPositions },
-					xAxis,
-					yAxis,
-				);
+		drawAxes(
+			ctx,
+			layout,
+			{
+				labels: xTickInfo.ticks.map((v) => formatTick(v)),
+				positions: xPositions,
+			},
+			{ values: yTickInfo.ticks, positions: yPositions },
+			xAxis,
+			yAxis,
+		);
 
-				if (legend?.visible !== false) {
-					legendHitRectsRef.current = drawLegend(
-						ctx,
-						layout,
-						datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
-						legend,
-						hiddenSeries,
-					);
-				}
-			}
+		if (legend?.visible !== false) {
+			legendHitRectsRef.current = drawLegend(
+				ctx,
+				layout,
+				datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
+				legend,
+				hiddenSeries,
+			);
 		}
+
+		drawOnce();
 	}, [
 		ready,
-		datasets,
 		layout,
+		xTickInfo,
+		yTickInfo,
+		datasets,
+		colors,
+		legend,
 		xAxis,
 		yAxis,
-		legend,
-		colors,
-		backgroundColor,
-		xMin,
-		xMax,
-		yMin,
-		yMax,
-		getRenderer,
 		width,
 		height,
 		hiddenSeries,
+		drawOnce,
 	]);
 
 	const handleMouseMove = useCallback(

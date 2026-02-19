@@ -5,6 +5,7 @@ import type { Rect } from "./gpu-renderer.ts";
 import { TooltipOverlay } from "./Tooltip.tsx";
 import type { ChartLayout, LegendHitRect, StackedBarChartProps, TooltipInfo } from "./types.ts";
 import { DEFAULT_COLORS } from "./types.ts";
+import { useChartAnimation } from "./use-chart-animation.ts";
 import { useWebGPU } from "./use-webgpu.ts";
 import { computeLayout, computeTicks, mapValue } from "./utils.ts";
 
@@ -18,6 +19,7 @@ export function StackedBarChart({
 	yAxis,
 	legend,
 	tooltip,
+	animation,
 	backgroundColor,
 	padding,
 }: StackedBarChartProps) {
@@ -65,22 +67,27 @@ export function StackedBarChart({
 		return maxVal;
 	}, [datasets, labels]);
 
+	// Compute ticks (shared between overlay and renderFrame)
+	const ticksInfo = useMemo(
+		() => computeTicks(0, stackedMax, orientation === "vertical" ? yAxis : xAxis),
+		[stackedMax, orientation, xAxis, yAxis],
+	);
+
 	const hitRectsRef = useRef<
 		{ rect: { x: number; y: number; w: number; h: number }; seriesIdx: number; catIdx: number }[]
 	>([]);
 
-	useEffect(() => {
-		if (!ready) return;
+	// ---- GPU render function (called on every animation frame) ----
+	const renderFrame = (enterProgress: number, seriesVis: number[]) => {
 		const renderer = getRenderer();
 		if (!renderer) return;
 
 		const rects: Rect[] = [];
 		const hitRects: (typeof hitRectsRef.current)[number][] = [];
 		const { plotX, plotY, plotWidth, plotHeight } = layout;
+		const { min, max } = ticksInfo;
 
 		if (orientation === "vertical") {
-			const valueAxis = yAxis;
-			const { min, max, ticks } = computeTicks(0, stackedMax, valueAxis);
 			const groupWidth = plotWidth / labels.length;
 			const barWidth = groupWidth * 0.7;
 			const groupPad = groupWidth * 0.15;
@@ -88,62 +95,27 @@ export function StackedBarChart({
 			for (let ci = 0; ci < labels.length; ci++) {
 				let cumulative = 0;
 				for (let di = 0; di < datasets.length; di++) {
-					if (hiddenSeries.has(di)) continue;
-					const val = datasets[di]?.data[ci] ?? 0;
+					const vis = seriesVis[di] ?? 1;
+					if (vis <= 0.001) continue;
+					const val = (datasets[di]?.data[ci] ?? 0) * vis * enterProgress;
 					const x = plotX + ci * groupWidth + groupPad;
 					const yBottom = mapValue(cumulative, min, max, plotY + plotHeight, -plotHeight);
 					const yTop = mapValue(cumulative + val, min, max, plotY + plotHeight, -plotHeight);
 					const rectY = Math.min(yBottom, yTop);
 					const rectH = Math.abs(yTop - yBottom);
-					rects.push({ x, y: rectY, w: barWidth, h: rectH, color: colors[di]! });
-					hitRects.push({
-						rect: { x, y: rectY, w: barWidth, h: rectH },
-						seriesIdx: di,
-						catIdx: ci,
-					});
-					cumulative += val;
-				}
-			}
-
-			hitRectsRef.current = hitRects;
-			const bgColor = backgroundColor ?? "#ffffff";
-			renderer.draw(rects, [], [], parseRGBA(bgColor));
-
-			// Overlay
-			const overlay = overlayRef.current;
-			if (overlay) {
-				overlay.width = width;
-				overlay.height = height;
-				const ctx = overlay.getContext("2d");
-				if (ctx) {
-					ctx.clearRect(0, 0, width, height);
-					const yPositions = ticks.map((v) =>
-						mapValue(v, min, max, plotY + plotHeight, -plotHeight),
-					);
-					const xPositions = labels.map((_, i) => plotX + (i + 0.5) * groupWidth);
-					drawAxes(
-						ctx,
-						layout,
-						{ labels, positions: xPositions },
-						{ values: ticks, positions: yPositions },
-						xAxis,
-						yAxis,
-					);
-					if (legend?.visible !== false) {
-						legendHitRectsRef.current = drawLegend(
-							ctx,
-							layout,
-							datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
-							legend,
-							hiddenSeries,
-						);
+					if (rectH > 0.1) {
+						rects.push({ x, y: rectY, w: barWidth, h: rectH, color: colors[di]! });
+						hitRects.push({
+							rect: { x, y: rectY, w: barWidth, h: rectH },
+							seriesIdx: di,
+							catIdx: ci,
+						});
 					}
+					cumulative += val;
 				}
 			}
 		} else {
 			// Horizontal
-			const valueAxis = xAxis;
-			const { min, max, ticks } = computeTicks(0, stackedMax, valueAxis);
 			const groupHeight = plotHeight / labels.length;
 			const barHeight = groupHeight * 0.7;
 			const groupPad = groupHeight * 0.15;
@@ -151,72 +123,107 @@ export function StackedBarChart({
 			for (let ci = 0; ci < labels.length; ci++) {
 				let cumulative = 0;
 				for (let di = 0; di < datasets.length; di++) {
-					if (hiddenSeries.has(di)) continue;
-					const val = datasets[di]?.data[ci] ?? 0;
+					const vis = seriesVis[di] ?? 1;
+					if (vis <= 0.001) continue;
+					const val = (datasets[di]?.data[ci] ?? 0) * vis * enterProgress;
 					const y = plotY + ci * groupHeight + groupPad;
 					const xLeft = mapValue(cumulative, min, max, plotX, plotWidth);
 					const xRight = mapValue(cumulative + val, min, max, plotX, plotWidth);
 					const rectX = Math.min(xLeft, xRight);
 					const rectW = Math.abs(xRight - xLeft);
-					rects.push({ x: rectX, y, w: rectW, h: barHeight, color: colors[di]! });
-					hitRects.push({
-						rect: { x: rectX, y, w: rectW, h: barHeight },
-						seriesIdx: di,
-						catIdx: ci,
-					});
+					if (rectW > 0.1) {
+						rects.push({ x: rectX, y, w: rectW, h: barHeight, color: colors[di]! });
+						hitRects.push({
+							rect: { x: rectX, y, w: rectW, h: barHeight },
+							seriesIdx: di,
+							catIdx: ci,
+						});
+					}
 					cumulative += val;
 				}
 			}
-
-			hitRectsRef.current = hitRects;
-			const bgColor = backgroundColor ?? "#ffffff";
-			renderer.draw(rects, [], [], parseRGBA(bgColor));
-
-			const overlay = overlayRef.current;
-			if (overlay) {
-				overlay.width = width;
-				overlay.height = height;
-				const ctx = overlay.getContext("2d");
-				if (ctx) {
-					ctx.clearRect(0, 0, width, height);
-					const xPositions = ticks.map((v) => mapValue(v, min, max, plotX, plotWidth));
-					const yPositions = labels.map((_, i) => plotY + (i + 0.5) * groupHeight);
-					drawAxesHorizontal(
-						ctx,
-						layout,
-						{ labels, positions: yPositions },
-						{ values: ticks, positions: xPositions },
-						xAxis,
-						yAxis,
-					);
-					if (legend?.visible !== false) {
-						legendHitRectsRef.current = drawLegend(
-							ctx,
-							layout,
-							datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
-							legend,
-							hiddenSeries,
-						);
-					}
-				}
-			}
 		}
+
+		hitRectsRef.current = hitRects;
+		renderer.draw(rects, [], [], parseRGBA(backgroundColor ?? "#ffffff"));
+	};
+
+	// ---- Animation hook (drives rAF loop) ----
+	const { drawOnce } = useChartAnimation(
+		datasets.length,
+		hiddenSeries,
+		ready,
+		renderFrame,
+		animation?.duration,
+		animation?.enabled,
+	);
+
+	// ---- Overlay (Canvas 2D – axes / labels / legend) ----
+	useEffect(() => {
+		if (!ready) return;
+		const { ticks, min, max } = ticksInfo;
+		const { plotX, plotY, plotWidth, plotHeight } = layout;
+
+		const overlay = overlayRef.current;
+		if (!overlay) return;
+		overlay.width = width;
+		overlay.height = height;
+		const ctx = overlay.getContext("2d");
+		if (!ctx) return;
+		ctx.clearRect(0, 0, width, height);
+
+		if (orientation === "vertical") {
+			const groupWidth = plotWidth / labels.length;
+			const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
+			const xPositions = labels.map((_, i) => plotX + (i + 0.5) * groupWidth);
+			drawAxes(
+				ctx,
+				layout,
+				{ labels, positions: xPositions },
+				{ values: ticks, positions: yPositions },
+				xAxis,
+				yAxis,
+			);
+		} else {
+			const groupHeight = plotHeight / labels.length;
+			const xPositions = ticks.map((v) => mapValue(v, min, max, plotX, plotWidth));
+			const yPositions = labels.map((_, i) => plotY + (i + 0.5) * groupHeight);
+			drawAxesHorizontal(
+				ctx,
+				layout,
+				{ labels, positions: yPositions },
+				{ values: ticks, positions: xPositions },
+				xAxis,
+				yAxis,
+			);
+		}
+
+		if (legend?.visible !== false) {
+			legendHitRectsRef.current = drawLegend(
+				ctx,
+				layout,
+				datasets.map((ds, i) => ({ label: ds.label, color: colors[i]! })),
+				legend,
+				hiddenSeries,
+			);
+		}
+
+		drawOnce();
 	}, [
 		ready,
-		datasets,
-		labels,
 		orientation,
 		layout,
+		ticksInfo,
+		labels,
+		datasets,
+		colors,
+		legend,
 		xAxis,
 		yAxis,
-		legend,
-		colors,
-		backgroundColor,
-		stackedMax,
-		getRenderer,
 		width,
 		height,
 		hiddenSeries,
+		drawOnce,
 	]);
 
 	const handleMouseMove = useCallback(

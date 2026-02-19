@@ -50,6 +50,16 @@ export interface LegendConfig {
 }
 
 // ============================================================
+// Animation configuration
+// ============================================================
+export interface AnimationConfig {
+	/** Enable / disable animation (default: true) */
+	enabled?: boolean;
+	/** Duration in milliseconds (default: 600) */
+	duration?: number;
+}
+
+// ============================================================
 // Tooltip configuration
 // ============================================================
 export interface TooltipConfig {
@@ -135,6 +145,8 @@ export interface BaseChartProps {
 	legend?: LegendConfig;
 	/** Tooltip config */
 	tooltip?: TooltipConfig;
+	/** Animation config */
+	animation?: AnimationConfig;
 	/** Padding inside chart area [top, right, bottom, left] */
 	padding?: [number, number, number, number];
 }
