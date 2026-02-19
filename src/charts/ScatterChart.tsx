@@ -7,6 +7,7 @@ import type { ChartLayout, LegendHitRect, ScatterChartProps, TooltipInfo } from 
 import { DEFAULT_COLORS } from "../types.ts";
 import { TooltipOverlay } from "../ui/Tooltip.tsx";
 import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { useChartZoom } from "../ui/use-chart-zoom.ts";
 import { computeLayout, computeTicks, mapValue } from "../utils.ts";
 
 export function ScatterChart({
@@ -60,9 +61,28 @@ export function ScatterChart({
 	const yMin = Math.min(...allY);
 	const yMax = Math.max(...allY);
 
+	// Zoom / pan
+	const {
+		isZoomed,
+		selectionStyle,
+		applyZoom,
+		handleZoomMouseDown,
+		handleZoomMouseMove,
+		handleZoomMouseUp,
+		handleZoomDoubleClick,
+		handleContextMenu,
+		cancelDrag,
+	} = useChartZoom(layout);
+
 	// Compute ticks (shared between overlay and renderFrame)
-	const xTickInfo = useMemo(() => computeTicks(xMin, xMax, xAxis), [xMin, xMax, xAxis]);
-	const yTickInfo = useMemo(() => computeTicks(yMin, yMax, yAxis), [yMin, yMax, yAxis]);
+	const xTickInfo = useMemo(() => {
+		const z = applyZoom(xMin, xMax, "x");
+		return computeTicks(z.min, z.max, xAxis);
+	}, [xMin, xMax, xAxis, applyZoom]);
+	const yTickInfo = useMemo(() => {
+		const z = applyZoom(yMin, yMax, "y");
+		return computeTicks(z.min, z.max, yAxis);
+	}, [yMin, yMax, yAxis, applyZoom]);
 
 	const hitPointsRef = useRef<
 		{ cx: number; cy: number; r: number; seriesIdx: number; pointIdx: number }[]
@@ -97,7 +117,13 @@ export function ScatterChart({
 		}
 
 		hitPointsRef.current = hitPoints;
-		renderer.draw([], [], circles, parseRGBA(backgroundColor ?? "#ffffff"));
+		renderer.draw(
+			[],
+			[],
+			circles,
+			parseRGBA(backgroundColor ?? "#ffffff"),
+			isZoomed ? { x: plotX, y: plotY, width: plotWidth, height: plotHeight } : undefined,
+		);
 	};
 
 	// ---- Animation hook (drives rAF loop) ----
@@ -171,6 +197,7 @@ export function ScatterChart({
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
+			if (handleZoomMouseMove(e)) return;
 			const rect = containerRef.current?.getBoundingClientRect();
 			if (!rect) return;
 			setContainerRect(rect);
@@ -211,15 +238,37 @@ export function ScatterChart({
 				setTooltipInfo(null);
 			}
 		},
-		[datasets, colors],
+		[datasets, colors, handleZoomMouseMove],
 	);
 
 	const handleMouseLeave = useCallback(() => {
 		setTooltipInfo(null);
+		cancelDrag();
 		if (containerRef.current) {
 			containerRef.current.style.cursor = "default";
 		}
-	}, []);
+	}, [cancelDrag]);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseDown(e);
+		},
+		[handleZoomMouseDown],
+	);
+
+	const handleMouseUp = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseUp(e);
+		},
+		[handleZoomMouseUp],
+	);
+
+	const handleDoubleClick = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomDoubleClick(e);
+		},
+		[handleZoomDoubleClick],
+	);
 
 	const handleClick = useCallback((e: React.MouseEvent) => {
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -267,6 +316,10 @@ export function ScatterChart({
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
 			onClick={handleClick}
+			onMouseDown={handleMouseDown}
+			onMouseUp={handleMouseUp}
+			onDoubleClick={handleDoubleClick}
+			onContextMenu={handleContextMenu}
 		>
 			<canvas
 				ref={canvasRef}
@@ -280,6 +333,7 @@ export function ScatterChart({
 				height={height}
 				style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
 			/>
+			{selectionStyle && <div style={selectionStyle} />}
 			<TooltipOverlay info={tooltipInfo} config={tooltip} containerRect={containerRect} />
 		</div>
 	);

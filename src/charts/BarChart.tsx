@@ -7,6 +7,7 @@ import type { BarChartProps, ChartLayout, LegendHitRect, TooltipInfo } from "../
 import { DEFAULT_COLORS } from "../types.ts";
 import { TooltipOverlay } from "../ui/Tooltip.tsx";
 import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { useChartZoom } from "../ui/use-chart-zoom.ts";
 import { computeLayout, computeTicks, mapValue } from "../utils.ts";
 
 export function BarChart({
@@ -56,6 +57,20 @@ export function BarChart({
 		[width, height, padding, xAxis?.title, yAxis?.title, legendHeight, legendPos],
 	);
 
+	// Zoom / pan
+	const {
+		isZoomed,
+		selectionStyle,
+		applyZoom,
+		getEffectivePlot,
+		handleZoomMouseDown,
+		handleZoomMouseMove,
+		handleZoomMouseUp,
+		handleZoomDoubleClick,
+		handleContextMenu,
+		cancelDrag,
+	} = useChartZoom(layout);
+
 	// Compute value range
 	const allValues = useMemo(() => datasets.flatMap((ds) => ds.data), [datasets]);
 	const dataMin = Math.min(0, ...allValues);
@@ -67,10 +82,14 @@ export function BarChart({
 	>([]);
 
 	// Compute ticks (shared between overlay and renderFrame)
-	const ticksInfo = useMemo(
-		() => computeTicks(dataMin, dataMax, orientation === "vertical" ? yAxis : xAxis),
-		[dataMin, dataMax, orientation, xAxis, yAxis],
-	);
+	const ticksInfo = useMemo(() => {
+		if (orientation === "vertical") {
+			const z = applyZoom(dataMin, dataMax, "y");
+			return computeTicks(z.min, z.max, yAxis);
+		}
+		const z = applyZoom(dataMin, dataMax, "x");
+		return computeTicks(z.min, z.max, xAxis);
+	}, [dataMin, dataMax, orientation, xAxis, yAxis, applyZoom]);
 
 	const drawOverlayVertical = useCallback(
 		(lay: ChartLayout, ticks: number[], cats: string[], min: number, max: number) => {
@@ -85,12 +104,23 @@ export function BarChart({
 			const yPositions = ticks.map((v) =>
 				mapValue(v, min, max, lay.plotY + lay.plotHeight, -lay.plotHeight),
 			);
-			const xPositions = cats.map((_, i) => lay.plotX + (i + 0.5) * (lay.plotWidth / cats.length));
+
+			// Effective X for categories (may be expanded when zoomed)
+			const effX = getEffectivePlot("x");
+			const allXPos = cats.map((_, i) => effX.start + (i + 0.5) * (effX.size / cats.length));
+			const visCats: string[] = [];
+			const visXPos: number[] = [];
+			for (let i = 0; i < cats.length; i++) {
+				if (allXPos[i]! >= lay.plotX - 20 && allXPos[i]! <= lay.plotX + lay.plotWidth + 20) {
+					visCats.push(cats[i]!);
+					visXPos.push(allXPos[i]!);
+				}
+			}
 
 			drawAxes(
 				ctx,
 				lay,
-				{ labels: cats, positions: xPositions },
+				{ labels: visCats, positions: visXPos },
 				{ values: ticks, positions: yPositions },
 				xAxis,
 				yAxis,
@@ -106,7 +136,7 @@ export function BarChart({
 				);
 			}
 		},
-		[width, height, xAxis, yAxis, legend, datasets, colors, hiddenSeries],
+		[width, height, xAxis, yAxis, legend, datasets, colors, hiddenSeries, getEffectivePlot],
 	);
 
 	const drawOverlayHorizontal = useCallback(
@@ -120,12 +150,23 @@ export function BarChart({
 			ctx.clearRect(0, 0, width, height);
 
 			const xPositions = ticks.map((v) => mapValue(v, min, max, lay.plotX, lay.plotWidth));
-			const yPositions = cats.map((_, i) => lay.plotY + (i + 0.5) * (lay.plotHeight / cats.length));
+
+			// Effective Y for categories (may be expanded when zoomed)
+			const effY = getEffectivePlot("y");
+			const allYPos = cats.map((_, i) => effY.start + (i + 0.5) * (effY.size / cats.length));
+			const visCats: string[] = [];
+			const visYPos: number[] = [];
+			for (let i = 0; i < cats.length; i++) {
+				if (allYPos[i]! >= lay.plotY - 20 && allYPos[i]! <= lay.plotY + lay.plotHeight + 20) {
+					visCats.push(cats[i]!);
+					visYPos.push(allYPos[i]!);
+				}
+			}
 
 			drawAxesHorizontal(
 				ctx,
 				lay,
-				{ labels: cats, positions: yPositions },
+				{ labels: visCats, positions: visYPos },
 				{ values: ticks, positions: xPositions },
 				xAxis,
 				yAxis,
@@ -141,7 +182,7 @@ export function BarChart({
 				);
 			}
 		},
-		[width, height, xAxis, yAxis, legend, datasets, colors, hiddenSeries],
+		[width, height, xAxis, yAxis, legend, datasets, colors, hiddenSeries, getEffectivePlot],
 	);
 
 	// ---- GPU render function (called on every animation frame) ----
@@ -155,7 +196,8 @@ export function BarChart({
 		const { min, max } = ticksInfo;
 
 		if (orientation === "vertical") {
-			const groupWidth = plotWidth / labels.length;
+			const effX = getEffectivePlot("x");
+			const groupWidth = effX.size / labels.length;
 			const barWidth = datasets.length > 0 ? (groupWidth * 0.7) / datasets.length : 0;
 			const groupPad = groupWidth * 0.15;
 			const baseline = mapValue(0, min, max, plotY + plotHeight, -plotHeight);
@@ -168,7 +210,7 @@ export function BarChart({
 
 				for (let ci = 0; ci < labels.length; ci++) {
 					const val = ds.data[ci] ?? 0;
-					const x = plotX + ci * groupWidth + groupPad + di * barWidth;
+					const x = effX.start + ci * groupWidth + groupPad + di * barWidth;
 					const yTarget = mapValue(val, min, max, plotY + plotHeight, -plotHeight);
 
 					const animFactor = enterProgress * vis;
@@ -188,7 +230,8 @@ export function BarChart({
 			}
 		} else {
 			// Horizontal
-			const groupHeight = plotHeight / labels.length;
+			const effY = getEffectivePlot("y");
+			const groupHeight = effY.size / labels.length;
 			const barHeight = datasets.length > 0 ? (groupHeight * 0.7) / datasets.length : 0;
 			const groupPad = groupHeight * 0.15;
 			const baseline = mapValue(0, min, max, plotX, plotWidth);
@@ -201,7 +244,7 @@ export function BarChart({
 
 				for (let ci = 0; ci < labels.length; ci++) {
 					const val = ds.data[ci] ?? 0;
-					const y = plotY + ci * groupHeight + groupPad + di * barHeight;
+					const y = effY.start + ci * groupHeight + groupPad + di * barHeight;
 					const xTarget = mapValue(val, min, max, plotX, plotWidth);
 
 					const animFactor = enterProgress * vis;
@@ -222,7 +265,13 @@ export function BarChart({
 		}
 
 		hitRectsRef.current = hitRects;
-		renderer.draw(rects, [], [], parseRGBA(backgroundColor ?? "#ffffff"));
+		renderer.draw(
+			rects,
+			[],
+			[],
+			parseRGBA(backgroundColor ?? "#ffffff"),
+			isZoomed ? { x: plotX, y: plotY, width: plotWidth, height: plotHeight } : undefined,
+		);
 	};
 
 	// ---- Animation hook (drives rAF loop) ----
@@ -259,6 +308,7 @@ export function BarChart({
 	// Mouse hover
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
+			if (handleZoomMouseMove(e)) return;
 			const rect = containerRef.current?.getBoundingClientRect();
 			if (!rect) return;
 			setContainerRect(rect);
@@ -294,15 +344,37 @@ export function BarChart({
 			}
 			setTooltipInfo(null);
 		},
-		[datasets, labels, colors],
+		[datasets, labels, colors, handleZoomMouseMove],
 	);
 
 	const handleMouseLeave = useCallback(() => {
 		setTooltipInfo(null);
+		cancelDrag();
 		if (containerRef.current) {
 			containerRef.current.style.cursor = "default";
 		}
-	}, []);
+	}, [cancelDrag]);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseDown(e);
+		},
+		[handleZoomMouseDown],
+	);
+
+	const handleMouseUp = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseUp(e);
+		},
+		[handleZoomMouseUp],
+	);
+
+	const handleDoubleClick = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomDoubleClick(e);
+		},
+		[handleZoomDoubleClick],
+	);
 
 	const handleClick = useCallback((e: React.MouseEvent) => {
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -350,6 +422,10 @@ export function BarChart({
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
 			onClick={handleClick}
+			onMouseDown={handleMouseDown}
+			onMouseUp={handleMouseUp}
+			onDoubleClick={handleDoubleClick}
+			onContextMenu={handleContextMenu}
 		>
 			<canvas
 				ref={canvasRef}
@@ -363,6 +439,7 @@ export function BarChart({
 				height={height}
 				style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
 			/>
+			{selectionStyle && <div style={selectionStyle} />}
 			<TooltipOverlay info={tooltipInfo} config={tooltip} containerRect={containerRect} />
 		</div>
 	);

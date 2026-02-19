@@ -180,12 +180,15 @@ export class GPURenderer {
 
 	/**
 	 * Render a frame. All primitives are converted to triangles and drawn at once.
+	 * When `clipRect` is provided the draw calls are clipped to that pixel rectangle
+	 * (useful for zoomed charts where geometry may exceed the plot area).
 	 */
 	draw(
 		rects: Rect[],
 		lines: Line[],
 		circles: Circle[],
 		bgColor: [number, number, number, number] = [1, 1, 1, 1],
+		clipRect?: { x: number; y: number; width: number; height: number },
 	): void {
 		if (!this.device || !this.context || !this.pipeline || !this.canvas) return;
 
@@ -311,6 +314,15 @@ export class GPURenderer {
 			],
 		});
 		pass.setPipeline(this.pipeline);
+		if (clipRect) {
+			const cx = Math.max(0, Math.round(clipRect.x));
+			const cy = Math.max(0, Math.round(clipRect.y));
+			const cw = Math.min(w - cx, Math.round(clipRect.width));
+			const ch = Math.min(h - cy, Math.round(clipRect.height));
+			if (cw > 0 && ch > 0) {
+				pass.setScissorRect(cx, cy, cw, ch);
+			}
+		}
 		pass.setVertexBuffer(0, vertexBuffer);
 		pass.draw(data.length / FLOATS_PER_VERTEX);
 		pass.end();

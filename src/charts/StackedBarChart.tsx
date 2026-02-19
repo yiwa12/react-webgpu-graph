@@ -7,6 +7,7 @@ import type { ChartLayout, LegendHitRect, StackedBarChartProps, TooltipInfo } fr
 import { DEFAULT_COLORS } from "../types.ts";
 import { TooltipOverlay } from "../ui/Tooltip.tsx";
 import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { useChartZoom } from "../ui/use-chart-zoom.ts";
 import { computeLayout, computeTicks, mapValue } from "../utils.ts";
 
 export function StackedBarChart({
@@ -67,11 +68,29 @@ export function StackedBarChart({
 		return maxVal;
 	}, [datasets, labels]);
 
+	// Zoom / pan
+	const {
+		isZoomed,
+		selectionStyle,
+		applyZoom,
+		getEffectivePlot,
+		handleZoomMouseDown,
+		handleZoomMouseMove,
+		handleZoomMouseUp,
+		handleZoomDoubleClick,
+		handleContextMenu,
+		cancelDrag,
+	} = useChartZoom(layout);
+
 	// Compute ticks (shared between overlay and renderFrame)
-	const ticksInfo = useMemo(
-		() => computeTicks(0, stackedMax, orientation === "vertical" ? yAxis : xAxis),
-		[stackedMax, orientation, xAxis, yAxis],
-	);
+	const ticksInfo = useMemo(() => {
+		if (orientation === "vertical") {
+			const z = applyZoom(0, stackedMax, "y");
+			return computeTicks(z.min, z.max, yAxis);
+		}
+		const z = applyZoom(0, stackedMax, "x");
+		return computeTicks(z.min, z.max, xAxis);
+	}, [stackedMax, orientation, xAxis, yAxis, applyZoom]);
 
 	const hitRectsRef = useRef<
 		{ rect: { x: number; y: number; w: number; h: number }; seriesIdx: number; catIdx: number }[]
@@ -88,7 +107,8 @@ export function StackedBarChart({
 		const { min, max } = ticksInfo;
 
 		if (orientation === "vertical") {
-			const groupWidth = plotWidth / labels.length;
+			const effX = getEffectivePlot("x");
+			const groupWidth = effX.size / labels.length;
 			const barWidth = groupWidth * 0.7;
 			const groupPad = groupWidth * 0.15;
 
@@ -98,7 +118,7 @@ export function StackedBarChart({
 					const vis = seriesVis[di] ?? 1;
 					if (vis <= 0.001) continue;
 					const val = (datasets[di]?.data[ci] ?? 0) * vis * enterProgress;
-					const x = plotX + ci * groupWidth + groupPad;
+					const x = effX.start + ci * groupWidth + groupPad;
 					const yBottom = mapValue(cumulative, min, max, plotY + plotHeight, -plotHeight);
 					const yTop = mapValue(cumulative + val, min, max, plotY + plotHeight, -plotHeight);
 					const rectY = Math.min(yBottom, yTop);
@@ -116,7 +136,8 @@ export function StackedBarChart({
 			}
 		} else {
 			// Horizontal
-			const groupHeight = plotHeight / labels.length;
+			const effY = getEffectivePlot("y");
+			const groupHeight = effY.size / labels.length;
 			const barHeight = groupHeight * 0.7;
 			const groupPad = groupHeight * 0.15;
 
@@ -126,7 +147,7 @@ export function StackedBarChart({
 					const vis = seriesVis[di] ?? 1;
 					if (vis <= 0.001) continue;
 					const val = (datasets[di]?.data[ci] ?? 0) * vis * enterProgress;
-					const y = plotY + ci * groupHeight + groupPad;
+					const y = effY.start + ci * groupHeight + groupPad;
 					const xLeft = mapValue(cumulative, min, max, plotX, plotWidth);
 					const xRight = mapValue(cumulative + val, min, max, plotX, plotWidth);
 					const rectX = Math.min(xLeft, xRight);
@@ -145,7 +166,13 @@ export function StackedBarChart({
 		}
 
 		hitRectsRef.current = hitRects;
-		renderer.draw(rects, [], [], parseRGBA(backgroundColor ?? "#ffffff"));
+		renderer.draw(
+			rects,
+			[],
+			[],
+			parseRGBA(backgroundColor ?? "#ffffff"),
+			isZoomed ? { x: plotX, y: plotY, width: plotWidth, height: plotHeight } : undefined,
+		);
 	};
 
 	// ---- Animation hook (drives rAF loop) ----
@@ -173,25 +200,47 @@ export function StackedBarChart({
 		ctx.clearRect(0, 0, width, height);
 
 		if (orientation === "vertical") {
-			const groupWidth = plotWidth / labels.length;
+			const effX = getEffectivePlot("x");
+			const groupWidth = effX.size / labels.length;
 			const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
-			const xPositions = labels.map((_, i) => plotX + (i + 0.5) * groupWidth);
+
+			const allXPos = labels.map((_, i) => effX.start + (i + 0.5) * groupWidth);
+			const visLabels: string[] = [];
+			const visXPos: number[] = [];
+			for (let i = 0; i < labels.length; i++) {
+				if (allXPos[i]! >= plotX - 20 && allXPos[i]! <= plotX + plotWidth + 20) {
+					visLabels.push(labels[i]!);
+					visXPos.push(allXPos[i]!);
+				}
+			}
+
 			drawAxes(
 				ctx,
 				layout,
-				{ labels, positions: xPositions },
+				{ labels: visLabels, positions: visXPos },
 				{ values: ticks, positions: yPositions },
 				xAxis,
 				yAxis,
 			);
 		} else {
-			const groupHeight = plotHeight / labels.length;
+			const effY = getEffectivePlot("y");
+			const groupHeight = effY.size / labels.length;
 			const xPositions = ticks.map((v) => mapValue(v, min, max, plotX, plotWidth));
-			const yPositions = labels.map((_, i) => plotY + (i + 0.5) * groupHeight);
+
+			const allYPos = labels.map((_, i) => effY.start + (i + 0.5) * groupHeight);
+			const visLabels: string[] = [];
+			const visYPos: number[] = [];
+			for (let i = 0; i < labels.length; i++) {
+				if (allYPos[i]! >= plotY - 20 && allYPos[i]! <= plotY + plotHeight + 20) {
+					visLabels.push(labels[i]!);
+					visYPos.push(allYPos[i]!);
+				}
+			}
+
 			drawAxesHorizontal(
 				ctx,
 				layout,
-				{ labels, positions: yPositions },
+				{ labels: visLabels, positions: visYPos },
 				{ values: ticks, positions: xPositions },
 				xAxis,
 				yAxis,
@@ -224,10 +273,12 @@ export function StackedBarChart({
 		height,
 		hiddenSeries,
 		drawOnce,
+		getEffectivePlot,
 	]);
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
+			if (handleZoomMouseMove(e)) return;
 			const rect = containerRef.current?.getBoundingClientRect();
 			if (!rect) return;
 			setContainerRect(rect);
@@ -263,15 +314,37 @@ export function StackedBarChart({
 			}
 			setTooltipInfo(null);
 		},
-		[datasets, labels, colors],
+		[datasets, labels, colors, handleZoomMouseMove],
 	);
 
 	const handleMouseLeave = useCallback(() => {
 		setTooltipInfo(null);
+		cancelDrag();
 		if (containerRef.current) {
 			containerRef.current.style.cursor = "default";
 		}
-	}, []);
+	}, [cancelDrag]);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseDown(e);
+		},
+		[handleZoomMouseDown],
+	);
+
+	const handleMouseUp = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseUp(e);
+		},
+		[handleZoomMouseUp],
+	);
+
+	const handleDoubleClick = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomDoubleClick(e);
+		},
+		[handleZoomDoubleClick],
+	);
 
 	const handleClick = useCallback((e: React.MouseEvent) => {
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -319,6 +392,10 @@ export function StackedBarChart({
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
 			onClick={handleClick}
+			onMouseDown={handleMouseDown}
+			onMouseUp={handleMouseUp}
+			onDoubleClick={handleDoubleClick}
+			onContextMenu={handleContextMenu}
 		>
 			<canvas
 				ref={canvasRef}
@@ -332,6 +409,7 @@ export function StackedBarChart({
 				height={height}
 				style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
 			/>
+			{selectionStyle && <div style={selectionStyle} />}
 			<TooltipOverlay info={tooltipInfo} config={tooltip} containerRect={containerRect} />
 		</div>
 	);

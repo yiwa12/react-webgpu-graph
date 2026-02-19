@@ -7,6 +7,7 @@ import type { ChartLayout, LegendHitRect, LineChartProps, TooltipInfo } from "..
 import { DEFAULT_COLORS } from "../types.ts";
 import { TooltipOverlay } from "../ui/Tooltip.tsx";
 import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { useChartZoom } from "../ui/use-chart-zoom.ts";
 import { computeLayout, computeTicks, mapValue } from "../utils.ts";
 
 export function LineChart({
@@ -57,8 +58,25 @@ export function LineChart({
 	const dataMin = Math.min(...allValues);
 	const dataMax = Math.max(...allValues);
 
+	// Zoom / pan
+	const {
+		isZoomed,
+		selectionStyle,
+		applyZoom,
+		getEffectivePlot,
+		handleZoomMouseDown,
+		handleZoomMouseMove,
+		handleZoomMouseUp,
+		handleZoomDoubleClick,
+		handleContextMenu,
+		cancelDrag,
+	} = useChartZoom(layout);
+
 	// Compute ticks (shared between overlay and renderFrame)
-	const ticksInfo = useMemo(() => computeTicks(dataMin, dataMax, yAxis), [dataMin, dataMax, yAxis]);
+	const ticksInfo = useMemo(() => {
+		const z = applyZoom(dataMin, dataMax, "y");
+		return computeTicks(z.min, z.max, yAxis);
+	}, [dataMin, dataMax, yAxis, applyZoom]);
 
 	// Hit points for tooltip
 	const hitPointsRef = useRef<
@@ -80,6 +98,8 @@ export function LineChart({
 		const baselineVal = Math.max(min, Math.min(max, 0));
 		const baselineY = mapValue(baselineVal, min, max, plotY + plotHeight, -plotHeight);
 
+		const effX = getEffectivePlot("x");
+
 		for (let di = 0; di < datasets.length; di++) {
 			const vis = seriesVis[di] ?? 1;
 			if (vis <= 0.001) continue;
@@ -94,7 +114,7 @@ export function LineChart({
 			const points: { x: number; y: number }[] = [];
 			for (let ci = 0; ci < ds.data.length; ci++) {
 				const val = ds.data[ci] ?? 0;
-				const x = plotX + (ci + 0.5) * (plotWidth / labels.length);
+				const x = effX.start + (ci + 0.5) * (effX.size / labels.length);
 				const yTarget = mapValue(val, min, max, plotY + plotHeight, -plotHeight);
 				const y = baselineY + (yTarget - baselineY) * animFactor;
 				points.push({ x, y });
@@ -134,7 +154,13 @@ export function LineChart({
 		}
 
 		hitPointsRef.current = hitPoints;
-		renderer.draw([], lines, circles, parseRGBA(backgroundColor ?? "#ffffff"));
+		renderer.draw(
+			[],
+			lines,
+			circles,
+			parseRGBA(backgroundColor ?? "#ffffff"),
+			isZoomed ? { x: plotX, y: plotY, width: plotWidth, height: plotHeight } : undefined,
+		);
 	};
 
 	// ---- Animation hook (drives rAF loop) ----
@@ -162,12 +188,23 @@ export function LineChart({
 		ctx.clearRect(0, 0, width, height);
 
 		const yPositions = ticks.map((v) => mapValue(v, min, max, plotY + plotHeight, -plotHeight));
-		const xPositions = labels.map((_, i) => plotX + (i + 0.5) * (plotWidth / labels.length));
+
+		// Effective X for categories (may be expanded when zoomed)
+		const effX = getEffectivePlot("x");
+		const allXPos = labels.map((_, i) => effX.start + (i + 0.5) * (effX.size / labels.length));
+		const visLabels: string[] = [];
+		const visXPos: number[] = [];
+		for (let i = 0; i < labels.length; i++) {
+			if (allXPos[i]! >= plotX - 20 && allXPos[i]! <= plotX + plotWidth + 20) {
+				visLabels.push(labels[i]!);
+				visXPos.push(allXPos[i]!);
+			}
+		}
 
 		drawAxes(
 			ctx,
 			layout,
-			{ labels, positions: xPositions },
+			{ labels: visLabels, positions: visXPos },
 			{ values: ticks, positions: yPositions },
 			xAxis,
 			yAxis,
@@ -198,10 +235,12 @@ export function LineChart({
 		height,
 		hiddenSeries,
 		drawOnce,
+		getEffectivePlot,
 	]);
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
+			if (handleZoomMouseMove(e)) return;
 			const rect = containerRef.current?.getBoundingClientRect();
 			if (!rect) return;
 			setContainerRect(rect);
@@ -241,15 +280,37 @@ export function LineChart({
 				setTooltipInfo(null);
 			}
 		},
-		[datasets, labels, colors],
+		[datasets, labels, colors, handleZoomMouseMove],
 	);
 
 	const handleMouseLeave = useCallback(() => {
 		setTooltipInfo(null);
+		cancelDrag();
 		if (containerRef.current) {
 			containerRef.current.style.cursor = "default";
 		}
-	}, []);
+	}, [cancelDrag]);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseDown(e);
+		},
+		[handleZoomMouseDown],
+	);
+
+	const handleMouseUp = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseUp(e);
+		},
+		[handleZoomMouseUp],
+	);
+
+	const handleDoubleClick = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomDoubleClick(e);
+		},
+		[handleZoomDoubleClick],
+	);
 
 	const handleClick = useCallback((e: React.MouseEvent) => {
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -297,6 +358,10 @@ export function LineChart({
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
 			onClick={handleClick}
+			onMouseDown={handleMouseDown}
+			onMouseUp={handleMouseUp}
+			onDoubleClick={handleDoubleClick}
+			onContextMenu={handleContextMenu}
 		>
 			<canvas
 				ref={canvasRef}
@@ -310,6 +375,7 @@ export function LineChart({
 				height={height}
 				style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
 			/>
+			{selectionStyle && <div style={selectionStyle} />}
 			<TooltipOverlay info={tooltipInfo} config={tooltip} containerRect={containerRect} />
 		</div>
 	);

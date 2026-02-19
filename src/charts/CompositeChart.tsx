@@ -19,6 +19,7 @@ import type {
 import { DEFAULT_COLORS } from "../types.ts";
 import { TooltipOverlay } from "../ui/Tooltip.tsx";
 import { useChartAnimation } from "../ui/use-chart-animation.ts";
+import { useChartZoom } from "../ui/use-chart-zoom.ts";
 import { computeCompositeLayout, computeTicks, formatTick, mapValue } from "../utils.ts";
 
 // ============================================================
@@ -287,6 +288,20 @@ export function CompositeChart({
 		],
 	);
 
+	// Zoom / pan
+	const {
+		isZoomed,
+		selectionStyle,
+		applyZoom,
+		getEffectivePlot,
+		handleZoomMouseDown,
+		handleZoomMouseMove,
+		handleZoomMouseUp,
+		handleZoomDoubleClick,
+		handleContextMenu,
+		cancelDrag,
+	} = useChartZoom(layout);
+
 	// ---- Value ranges ----
 	// First child = primary axis, remaining children = secondary axis
 	const { primaryRange, secondaryRange, primaryXRange, secondaryXRange } = useMemo(() => {
@@ -399,16 +414,19 @@ export function CompositeChart({
 		if (sharedAxes === "y" || sharedAxes === "both") {
 			const min = Math.min(primaryRange.min, secondaryRange.min);
 			const max = Math.max(primaryRange.max, secondaryRange.max);
-			return computeTicks(min, max, yAxis);
+			const z = applyZoom(min, max, "y");
+			return computeTicks(z.min, z.max, yAxis);
 		}
-		return computeTicks(primaryRange.min, primaryRange.max, yAxis);
-	}, [sharedAxes, primaryRange, secondaryRange, yAxis]);
+		const z = applyZoom(primaryRange.min, primaryRange.max, "y");
+		return computeTicks(z.min, z.max, yAxis);
+	}, [sharedAxes, primaryRange, secondaryRange, yAxis, applyZoom]);
 
 	const secondaryYTicks = useMemo(() => {
 		if (sharedAxes === "both" || sharedAxes === "y") return null;
 		if (layers.length <= 1) return null;
-		return computeTicks(secondaryRange.min, secondaryRange.max, yAxisSecondary);
-	}, [sharedAxes, secondaryRange, yAxisSecondary, layers.length]);
+		const z = applyZoom(secondaryRange.min, secondaryRange.max, "y");
+		return computeTicks(z.min, z.max, yAxisSecondary);
+	}, [sharedAxes, secondaryRange, yAxisSecondary, layers.length, applyZoom]);
 
 	const primaryXTicks = useMemo(() => {
 		if (layers.length === 0) return null;
@@ -417,23 +435,26 @@ export function CompositeChart({
 			if (sharedAxes === "x" || sharedAxes === "both") {
 				const min = Math.min(primaryXRange.min, secondaryXRange.min);
 				const max = Math.max(primaryXRange.max, secondaryXRange.max);
-				return computeTicks(min, max, xAxis);
+				const z = applyZoom(min, max, "x");
+				return computeTicks(z.min, z.max, xAxis);
 			}
-			return computeTicks(primaryXRange.min, primaryXRange.max, xAxis);
+			const z = applyZoom(primaryXRange.min, primaryXRange.max, "x");
+			return computeTicks(z.min, z.max, xAxis);
 		}
 		return null; // category labels handled separately
-	}, [sharedAxes, layers, primaryXRange, secondaryXRange, xAxis]);
+	}, [sharedAxes, layers, primaryXRange, secondaryXRange, xAxis, applyZoom]);
 
 	const secondaryXTicks = useMemo(() => {
 		if (sharedAxes === "both" || sharedAxes === "x") return null;
 		if (layers.length <= 1) return null;
 		for (let i = 1; i < layers.length; i++) {
 			if (layers[i]!.chartType === "scatter") {
-				return computeTicks(secondaryXRange.min, secondaryXRange.max, xAxisSecondary);
+				const z = applyZoom(secondaryXRange.min, secondaryXRange.max, "x");
+				return computeTicks(z.min, z.max, xAxisSecondary);
 			}
 		}
 		return null;
-	}, [sharedAxes, layers, secondaryXRange, xAxisSecondary]);
+	}, [sharedAxes, layers, secondaryXRange, xAxisSecondary, applyZoom]);
 
 	// ---- GPU render function ----
 	const renderFrame = (enterProgress: number, seriesVis: number[]) => {
@@ -445,6 +466,10 @@ export function CompositeChart({
 		const circles: Circle[] = [];
 		const nextHitRects: HitRect[] = [];
 		const nextHitPoints: HitPoint[] = [];
+
+		// Effective X layout for category-based layers
+		const effX = getEffectivePlot("x");
+		const effLayout: ChartLayout = { ...layout, plotX: effX.start, plotWidth: effX.size };
 
 		const priYMin = primaryYTicks.min;
 		const priYMax = primaryYTicks.max;
@@ -492,7 +517,7 @@ export function CompositeChart({
 					allColors,
 					seriesVis,
 					enterProgress,
-					layout,
+					effLayout,
 					layerYMin,
 					layerYMax,
 					layerLabels,
@@ -506,7 +531,7 @@ export function CompositeChart({
 					allColors,
 					seriesVis,
 					enterProgress,
-					layout,
+					effLayout,
 					layerYMin,
 					layerYMax,
 					layerLabels,
@@ -520,7 +545,7 @@ export function CompositeChart({
 					allColors,
 					seriesVis,
 					enterProgress,
-					layout,
+					effLayout,
 					layerYMin,
 					layerYMax,
 					layerLabels,
@@ -547,7 +572,14 @@ export function CompositeChart({
 
 		hitRectsRef.current = nextHitRects;
 		hitPointsRef.current = nextHitPoints;
-		renderer.draw(rects, lines, circles, parseRGBA(backgroundColor ?? "#ffffff"));
+		const { plotX, plotY, plotWidth, plotHeight } = layout;
+		renderer.draw(
+			rects,
+			lines,
+			circles,
+			parseRGBA(backgroundColor ?? "#ffffff"),
+			isZoomed ? { x: plotX, y: plotY, width: plotWidth, height: plotHeight } : undefined,
+		);
 	};
 
 	// ---- Animation ----
@@ -591,10 +623,19 @@ export function CompositeChart({
 			);
 			pXTicks = { labels: primaryXTicks.ticks.map((v) => formatTick(v)), positions: pXP };
 		} else if (sharedCategoryLabels.length > 0) {
-			const catPositions = sharedCategoryLabels.map(
-				(_, i) => plotX + (i + 0.5) * (plotWidth / sharedCategoryLabels.length),
+			const effX = getEffectivePlot("x");
+			const allPos = sharedCategoryLabels.map(
+				(_, i) => effX.start + (i + 0.5) * (effX.size / sharedCategoryLabels.length),
 			);
-			pXTicks = { labels: sharedCategoryLabels, positions: catPositions };
+			const visL: string[] = [];
+			const visP: number[] = [];
+			for (let i = 0; i < sharedCategoryLabels.length; i++) {
+				if (allPos[i]! >= plotX - 20 && allPos[i]! <= plotX + plotWidth + 20) {
+					visL.push(sharedCategoryLabels[i]!);
+					visP.push(allPos[i]!);
+				}
+			}
+			pXTicks = { labels: visL, positions: visP };
 		}
 
 		// Secondary Y axis labels (right side)
@@ -616,10 +657,19 @@ export function CompositeChart({
 					positions: sXP,
 				};
 			} else if (secondaryLabels.length > 0) {
-				const catPositions = secondaryLabels.map(
-					(_, i) => plotX + (i + 0.5) * (plotWidth / secondaryLabels.length),
+				const effX = getEffectivePlot("x");
+				const allPos = secondaryLabels.map(
+					(_, i) => effX.start + (i + 0.5) * (effX.size / secondaryLabels.length),
 				);
-				sXTicks = { labels: secondaryLabels, positions: catPositions };
+				const visL: string[] = [];
+				const visP: number[] = [];
+				for (let i = 0; i < secondaryLabels.length; i++) {
+					if (allPos[i]! >= plotX - 20 && allPos[i]! <= plotX + plotWidth + 20) {
+						visL.push(secondaryLabels[i]!);
+						visP.push(allPos[i]!);
+					}
+				}
+				sXTicks = { labels: visL, positions: visP };
 			}
 		}
 
@@ -663,6 +713,7 @@ export function CompositeChart({
 		height,
 		hiddenSeries,
 		drawOnce,
+		getEffectivePlot,
 	]);
 
 	// ---- Mouse handlers ----
@@ -713,6 +764,7 @@ export function CompositeChart({
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
+			if (handleZoomMouseMove(e)) return;
 			const rect = containerRef.current?.getBoundingClientRect();
 			if (!rect) return;
 			setContainerRect(rect);
@@ -760,15 +812,37 @@ export function CompositeChart({
 
 			setTooltipInfo(null);
 		},
-		[getTooltipInfo],
+		[getTooltipInfo, handleZoomMouseMove],
 	);
 
 	const handleMouseLeave = useCallback(() => {
 		setTooltipInfo(null);
+		cancelDrag();
 		if (containerRef.current) {
 			containerRef.current.style.cursor = "default";
 		}
-	}, []);
+	}, [cancelDrag]);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseDown(e);
+		},
+		[handleZoomMouseDown],
+	);
+
+	const handleMouseUp = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomMouseUp(e);
+		},
+		[handleZoomMouseUp],
+	);
+
+	const handleDoubleClick = useCallback(
+		(e: React.MouseEvent) => {
+			handleZoomDoubleClick(e);
+		},
+		[handleZoomDoubleClick],
+	);
 
 	const handleClick = useCallback((e: React.MouseEvent) => {
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -816,6 +890,10 @@ export function CompositeChart({
 			onMouseMove={handleMouseMove}
 			onMouseLeave={handleMouseLeave}
 			onClick={handleClick}
+			onMouseDown={handleMouseDown}
+			onMouseUp={handleMouseUp}
+			onDoubleClick={handleDoubleClick}
+			onContextMenu={handleContextMenu}
 		>
 			<canvas
 				ref={canvasRef}
@@ -829,6 +907,7 @@ export function CompositeChart({
 				height={height}
 				style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
 			/>
+			{selectionStyle && <div style={selectionStyle} />}
 			<TooltipOverlay info={tooltipInfo} config={tooltip} containerRect={containerRect} />
 		</div>
 	);
